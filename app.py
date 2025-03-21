@@ -98,18 +98,22 @@ for idx, route in enumerate(st.session_state.routes):
                 icon=folium.Icon(color="blue", icon="home")
             ).add_to(depot_map)
         depot_data = st_folium(depot_map, key=f"depot_map_{idx}", width=500, height=300)
-        if depot_data and depot_data.get("last_clicked"):
-            depot_location = (depot_data["last_clicked"]["lat"], depot_data["last_clicked"]["lng"])
-            route["depot"] = depot_location
-            st.write(f"**Depot set at:** {depot_location}")
+        if st.button("Set Depot", key=f"set_depot_{idx}"):
+            if depot_data and depot_data.get("last_clicked"):
+                depot_location = (depot_data["last_clicked"]["lat"], depot_data["last_clicked"]["lng"])
+                route["depot"] = depot_location
+                st.write(f"**Depot set at:** {depot_location}")
+            else:
+                st.write("Please click on the map to select a depot location.")
 
         # --- Pickups Input ---
         st.write("#### Pickups")
-        if st.button(f"Add Pickup for Route {route['route_id']}", key=f"add_pickup_{idx}"):
-            route["pickups"].append(None)
+        # Loop through existing pickups
         for i, pickup in enumerate(route["pickups"]):
             st.write(f"**Pickup {i+1}**")
-            pickup_map = folium.Map(location=route["depot"] if route["depot"] else [40.7128, -74.0060], zoom_start=12)
+            pickup_map = folium.Map(
+                location=route["depot"] if route["depot"] else [40.7128, -74.0060], zoom_start=12
+            )
             if pickup:
                 folium.Marker(
                     location=pickup,
@@ -121,14 +125,17 @@ for idx, route in enumerate(st.session_state.routes):
                 pickup_location = (pickup_data["last_clicked"]["lat"], pickup_data["last_clicked"]["lng"])
                 route["pickups"][i] = pickup_location
                 st.write(f"**Pickup {i+1} set at:** {pickup_location}")
+        # Button added at the bottom of the pickups section
+        if st.button(f"Add Pickup for Route {route['route_id']}", key=f"add_pickup_{idx}"):
+            route["pickups"].append(None)
 
         # --- School Dropoffs Input ---
         st.write("#### School Dropoffs")
-        if st.button(f"Add School Dropoff for Route {route['route_id']}", key=f"add_dropoff_{idx}"):
-            route["dropoffs"].append({"location": None, "bell_time": None})
         for j, dropoff in enumerate(route["dropoffs"]):
             st.write(f"**School Dropoff {j+1}**")
-            dropoff_map = folium.Map(location=route["depot"] if route["depot"] else [40.7128, -74.0060], zoom_start=12)
+            dropoff_map = folium.Map(
+                location=route["depot"] if route["depot"] else [40.7128, -74.0060], zoom_start=12
+            )
             if dropoff["location"]:
                 folium.Marker(
                     location=dropoff["location"],
@@ -143,6 +150,9 @@ for idx, route in enumerate(st.session_state.routes):
             # Bell Time Input for dropoff
             bell_time = st.time_input(f"Bell Time for School {j+1}", key=f"bell_time_{idx}_{j}")
             route["dropoffs"][j]["bell_time"] = bell_time
+        # Button added at the bottom of the school dropoffs section
+        if st.button(f"Add School Dropoff for Route {route['route_id']}", key=f"add_dropoff_{idx}"):
+            route["dropoffs"].append({"location": None, "bell_time": None})
 
 # ------------------------------
 # Route Calculation and Feasibility Check
