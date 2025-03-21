@@ -149,9 +149,15 @@ for idx, route in enumerate(st.session_state.routes):
 # ------------------------------
 
 st.header("Calculation")
-google_maps_api_key = st.text_input("Enter Google Maps API Key", type="password")
 
-if st.button("Calculate Route Feasibility"):
+# Retrieve API key from Streamlit's secrets
+try:
+    google_maps_api_key = st.secrets["google_maps_api_key"]
+except KeyError:
+    st.error("Google Maps API key not found in secrets. Please add it to your Streamlit secrets.")
+    google_maps_api_key = None
+
+if st.button("Calculate Route Feasibility") and google_maps_api_key:
     results = []  # to store feasibility results for each route
     efficiency = 2.5  # assumed miles per kWh
     
