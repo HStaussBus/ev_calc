@@ -13,15 +13,8 @@ import matplotlib.pyplot as plt
 def get_route_distance(api_key, origin, waypoints, destination):
     """
     Uses the Google Maps Directions API to compute total driving distance.
-    Parameters:
-      - origin: tuple (lat, lng)
-      - waypoints: list of tuples (lat, lng) (if any)
-      - destination: tuple (lat, lng)
-    Returns:
-      - total distance in miles (float) or None on error.
     """
     base_url = "https://maps.googleapis.com/maps/api/directions/json"
-    # Create the waypoints string if waypoints exist
     waypoints_str = "|".join([f"{wp[0]},{wp[1]}" for wp in waypoints]) if waypoints else ""
     params = {
         "origin": f"{origin[0]},{origin[1]}",
@@ -35,11 +28,9 @@ def get_route_distance(api_key, origin, waypoints, destination):
     response = requests.get(base_url, params=params)
     data = response.json()
     if data["status"] == "OK":
-        route = data["routes"][0]
         total_distance = 0
-        for leg in route["legs"]:
-            # Convert distance from meters to miles (1 mile = 1609.34 meters)
-            total_distance += leg["distance"]["value"] / 1609.34
+        for leg in data["routes"][0]["legs"]:
+            total_distance += leg["distance"]["value"] / 1609.34  # meters to miles
         return total_distance
     else:
         st.write("**[Error] Google Maps API response:**", data.get("error_message", data["status"]))
@@ -47,19 +38,25 @@ def get_route_distance(api_key, origin, waypoints, destination):
 
 def get_min_temperature(location):
     """
-    Placeholder for a weather API.
-    For demo purposes, if the depot's latitude is below 40, we simulate a min temp of 35°F; otherwise 45°F.
+    Placeholder for weather API. For demo purposes, if the depot's latitude is below 40, 
+    simulate a min temp of 35°F; otherwise, 45°F.
     """
     lat = location[0]
     return 35 if lat < 40 else 45
 
 # ------------------------------
-# Streamlit App Layout
+# Initialize Session State
 # ------------------------------
 
-st.title("EV Route Feasibility for School Buses")
+if "routes" not in st.session_state:
+    st.session_state.routes = []  # Each route is a dict
+if "selected_route_index" not in st.session_state:
+    st.session_state.selected_route_index = 0
 
-# --- EV Fleet Input ---
+# ------------------------------
+# EV Fleet Input
+# ------------------------------
+
 st.sidebar.header("EV Fleet Input")
 fleet_data = {
     "Bus Type": st.sidebar.selectbox("Select Bus Type", ["A", "C"]),
@@ -67,92 +64,91 @@ fleet_data = {
     "Number of Buses": st.sidebar.number_input("Number of Buses", min_value=1, value=5)
 }
 
-# --- Route Input ---
+# ------------------------------
+# Route Input (Single Map)
+# ------------------------------
+
 st.header("Route Input")
-st.write("Create one or more routes by defining three types of coordinates on a map:")
+st.write("Manage routes using a single interactive map. Choose the route (or add a new one), select the marker type, and click on the map to add a marker.")
 
-# Use session state to store multiple routes
-if "routes" not in st.session_state:
-    st.session_state.routes = []
-
-# Button to add a new route
+# Add new route button
 if st.button("Add New Route"):
     new_route = {
         "route_id": len(st.session_state.routes) + 1,
         "depot": None,
-        "pickups": [],         # list of (lat, lng) tuples
-        "dropoffs": []         # list of dicts: {"location": (lat, lng), "bell_time": <time>}
+        "pickups": [],         # list of (lat, lng)
+        "dropoffs": []         # list of dicts: {"location": (lat, lng), "bell_time": None}
     }
     st.session_state.routes.append(new_route)
+    st.session_state.selected_route_index = len(st.session_state.routes) - 1
 
-# Display each route in an expandable section
-for idx, route in enumerate(st.session_state.routes):
-    with st.expander(f"Route {route['route_id']}"):
-        # --- Depot Input ---
-        st.write("#### Depot Pullout")
-        depot_map = folium.Map(location=[40.7128, -74.0060], zoom_start=12)
-        if route["depot"]:
+# If routes exist, allow user to select one
+if st.session_state.routes:
+    route_labels = [f"Route {r['route_id']}" for r in st.session_state.routes]
+    selected = st.selectbox("Select Route", options=route_labels, index=st.session_state.selected_route_index)
+    current_index = route_labels.index(selected)
+    st.session_state.selected_route_index = current_index
+    current_route = st.session_state.routes[current_index]
+
+    # Choose marker type to add
+    marker_type = st.radio("Select Marker Type", options=["Depot", "Pickup", "Dropoff"])
+
+    st.write(f"Click on the map below to add a **{marker_type}** marker.")
+
+    # Create the base map
+    # Default center: use depot if set, else NYC coordinates
+    center = current_route["depot"] if current_route["depot"] else [40.7128, -74.0060]
+    m = folium.Map(location=center, zoom_start=12)
+
+    # Add existing markers to the map
+    if current_route["depot"]:
+        folium.Marker(
+            location=current_route["depot"],
+            tooltip="Depot",
+            icon=folium.Icon(color="blue", icon="home")
+        ).add_to(m)
+    for idx, pickup in enumerate(current_route["pickups"]):
+        folium.Marker(
+            location=pickup,
+            tooltip=f"Pickup {idx+1}",
+            icon=folium.Icon(color="green", icon="arrow-up")
+        ).add_to(m)
+    for idx, dropoff in enumerate(current_route["dropoffs"]):
+        if dropoff["location"]:
             folium.Marker(
-                location=route["depot"],
-                tooltip="Depot",
-                icon=folium.Icon(color="blue", icon="home")
-            ).add_to(depot_map)
-        depot_data = st_folium(depot_map, key=f"depot_map_{idx}", width=500, height=300)
-        if st.button("Set Depot", key=f"set_depot_{idx}"):
-            if depot_data and depot_data.get("last_clicked"):
-                depot_location = (depot_data["last_clicked"]["lat"], depot_data["last_clicked"]["lng"])
-                route["depot"] = depot_location
-                st.write(f"**Depot set at:** {depot_location}")
-            else:
-                st.write("Please click on the map to select a depot location.")
+                location=dropoff["location"],
+                tooltip=f"Dropoff {idx+1}",
+                icon=folium.Icon(color="red", icon="info-sign")
+            ).add_to(m)
 
-        # --- Pickups Input ---
-        st.write("#### Pickups")
-        # Loop through existing pickups
-        for i, pickup in enumerate(route["pickups"]):
-            st.write(f"**Pickup {i+1}**")
-            pickup_map = folium.Map(
-                location=route["depot"] if route["depot"] else [40.7128, -74.0060], zoom_start=12
-            )
-            if pickup:
-                folium.Marker(
-                    location=pickup,
-                    tooltip=f"Pickup {i+1}",
-                    icon=folium.Icon(color="green", icon="arrow-up")
-                ).add_to(pickup_map)
-            pickup_data = st_folium(pickup_map, key=f"pickup_map_{idx}_{i}", width=500, height=300)
-            if pickup_data and pickup_data.get("last_clicked"):
-                pickup_location = (pickup_data["last_clicked"]["lat"], pickup_data["last_clicked"]["lng"])
-                route["pickups"][i] = pickup_location
-                st.write(f"**Pickup {i+1} set at:** {pickup_location}")
-        # Button added at the bottom of the pickups section
-        if st.button(f"Add Pickup for Route {route['route_id']}", key=f"add_pickup_{idx}"):
-            route["pickups"].append(None)
+    # Display the single map
+    map_data = st_folium(m, key="main_map", width=700, height=500)
 
-        # --- School Dropoffs Input ---
-        st.write("#### School Dropoffs")
-        for j, dropoff in enumerate(route["dropoffs"]):
-            st.write(f"**School Dropoff {j+1}**")
-            dropoff_map = folium.Map(
-                location=route["depot"] if route["depot"] else [40.7128, -74.0060], zoom_start=12
-            )
-            if dropoff["location"]:
-                folium.Marker(
-                    location=dropoff["location"],
-                    tooltip=f"Dropoff {j+1}",
-                    icon=folium.Icon(color="red", icon="info-sign")
-                ).add_to(dropoff_map)
-            dropoff_data = st_folium(dropoff_map, key=f"dropoff_map_{idx}_{j}", width=500, height=300)
-            if dropoff_data and dropoff_data.get("last_clicked"):
-                dropoff_location = (dropoff_data["last_clicked"]["lat"], dropoff_data["last_clicked"]["lng"])
-                route["dropoffs"][j]["location"] = dropoff_location
-                st.write(f"**Dropoff {j+1} set at:** {dropoff_location}")
-            # Bell Time Input for dropoff
-            bell_time = st.time_input(f"Bell Time for School {j+1}", key=f"bell_time_{idx}_{j}")
-            route["dropoffs"][j]["bell_time"] = bell_time
-        # Button added at the bottom of the school dropoffs section
-        if st.button(f"Add School Dropoff for Route {route['route_id']}", key=f"add_dropoff_{idx}"):
-            route["dropoffs"].append({"location": None, "bell_time": None})
+    # Process click event from the map
+    if map_data and map_data.get("last_clicked"):
+        new_coord = (map_data["last_clicked"]["lat"], map_data["last_clicked"]["lng"])
+        st.write(f"**New {marker_type} coordinate detected:** {new_coord}")
+        # Clear last_clicked to avoid duplicate entries on re-run
+        map_data["last_clicked"] = None
+        if marker_type == "Depot":
+            current_route["depot"] = new_coord
+        elif marker_type == "Pickup":
+            current_route["pickups"].append(new_coord)
+        elif marker_type == "Dropoff":
+            current_route["dropoffs"].append({"location": new_coord, "bell_time": None})
+    
+    # Allow user to input bell times for dropoffs
+    if current_route["dropoffs"]:
+        st.write("### Set Bell Times for Dropoffs")
+        for idx, dropoff in enumerate(current_route["dropoffs"]):
+            default_time = dropoff["bell_time"] if dropoff["bell_time"] else datetime.time(8, 0)
+            bell_time = st.time_input(f"Bell Time for Dropoff {idx+1}", value=default_time, key=f"bell_time_{current_index}_{idx}")
+            current_route["dropoffs"][idx]["bell_time"] = bell_time
+
+    # Display current route details for debugging
+    st.write("**Current Route Data:**", current_route)
+else:
+    st.info("No routes added yet. Click 'Add New Route' to start.")
 
 # ------------------------------
 # Route Calculation and Feasibility Check
@@ -168,10 +164,9 @@ except KeyError:
     google_maps_api_key = None
 
 if st.button("Calculate Route Feasibility") and google_maps_api_key:
-    results = []  # to store feasibility results for each route
+    results = []  # store feasibility results for each route
     efficiency = 2.5  # assumed miles per kWh
-    
-    # Loop through each route and process calculations
+
     for route in st.session_state.routes:
         st.write(f"**[Debug] Processing Route {route['route_id']}**")
         if not route["depot"]:
@@ -180,14 +175,12 @@ if st.button("Calculate Route Feasibility") and google_maps_api_key:
         if not route["dropoffs"]:
             st.write(f"Route {route['route_id']}: No school dropoffs set.")
             continue
-        
-        # For this demo, assume the first dropoff is the final destination.
+
+        # Use the first dropoff as final destination (for demo purposes)
         destination = route["dropoffs"][0]["location"] if route["dropoffs"][0]["location"] else route["depot"]
         waypoints = []
-        # Combine all pickups
         if route["pickups"]:
             waypoints.extend(route["pickups"])
-        # Add additional dropoffs (if any) as waypoints (exclude destination)
         if len(route["dropoffs"]) > 1:
             for d in route["dropoffs"][1:]:
                 if d["location"]:
@@ -200,17 +193,14 @@ if st.button("Calculate Route Feasibility") and google_maps_api_key:
             continue
         st.write(f"**Route {route['route_id']} total distance:** {total_distance:.2f} miles")
         
-        # Calculate effective range using 60% of battery capacity
         effective_range = fleet_data["Battery Capacity (kWh)"] * 0.6 * efficiency
         
-        # Adjust range based on weather at the depot location
         min_temp = get_min_temperature(route["depot"])
         st.write(f"**Route {route['route_id']} depot min temperature:** {min_temp}°F")
         if min_temp < 40:
             effective_range *= 0.8
             st.write("**[Info] Temperature below 40°F: Effective range reduced by 20%.**")
         
-        # Check feasibility (distance must be within effective range)
         feasible = total_distance <= effective_range
         results.append({
             "Route ID": route["route_id"],
@@ -219,16 +209,13 @@ if st.button("Calculate Route Feasibility") and google_maps_api_key:
             "Feasible": "Yes" if feasible else "No"
         })
     
-    # Display the results in a table
     if results:
         results_df = pd.DataFrame(results)
         st.subheader("Route Feasibility Results")
         st.table(results_df)
 
-        # --- Plot a Range Curve ---
-        # For demonstration, we simulate how effective range might vary with temperature.
+        # Plot a simulated range curve
         temps = list(range(20, 81, 5))
-        # Effective range is reduced by 20% for temps below 40°F.
         ranges = [fleet_data["Battery Capacity (kWh)"] * 0.6 * efficiency * (0.8 if t < 40 else 1.0) for t in temps]
         fig, ax = plt.subplots()
         ax.plot(temps, ranges)
