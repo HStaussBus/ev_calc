@@ -15,6 +15,7 @@ def get_route_distance(api_key, origin, waypoints, destination):
     Uses the Google Maps Directions API to compute total driving distance.
     """
     base_url = "https://maps.googleapis.com/maps/api/directions/json"
+    # Create the waypoints string if waypoints exist
     waypoints_str = "|".join([f"{wp[0]},{wp[1]}" for wp in waypoints]) if waypoints else ""
     params = {
         "origin": f"{origin[0]},{origin[1]}",
@@ -22,7 +23,8 @@ def get_route_distance(api_key, origin, waypoints, destination):
         "waypoints": waypoints_str,
         "key": api_key,
         "mode": "driving",
-        "traffic_model": "best_guess"
+        "traffic_model": "best_guess",
+        "departure_time": "now"  # Added parameter to satisfy API requirements
     }
     st.write("**[Debug] Requesting route from Google Maps with parameters:**", params)
     response = requests.get(base_url, params=params)
@@ -30,7 +32,7 @@ def get_route_distance(api_key, origin, waypoints, destination):
     if data["status"] == "OK":
         total_distance = 0
         for leg in data["routes"][0]["legs"]:
-            total_distance += leg["distance"]["value"] / 1609.34  # meters to miles
+            total_distance += leg["distance"]["value"] / 1609.34  # convert meters to miles
         return total_distance
     else:
         st.write("**[Error] Google Maps API response:**", data.get("error_message", data["status"]))
