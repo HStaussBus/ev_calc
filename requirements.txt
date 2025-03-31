@@ -5,3 +5,5 @@ requests
 pandas		
 matplotlib
 shapely
+geopy
+datetime

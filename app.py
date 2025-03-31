@@ -8,6 +8,8 @@ import datetime
 from shapely import wkt
 import matplotlib.pyplot as plt
 import streamlit.components.v1 as components
+from geopy.geocoders import Nominatim
+import time
 
 
 zipcodes_df = pd.read_csv(".data/Modified_Zip_Code_Tabulation_Areas__MODZCTA_.csv")
@@ -19,6 +21,156 @@ zipcodes_df["centroid_lng"] = zipcodes_df["geometry"].apply(lambda g: g.centroid
 
 # Build lookup: MODZCTA → (lat, lng)
 zip_lookup = zipcodes_df.set_index("MODZCTA")[["centroid_lat", "centroid_lng"]].to_dict("index")
+
+#Session State
+if "routes" not in st.session_state:
+    st.session_state.routes = []  # Each route is a dict
+if "selected_route_index" not in st.session_state:
+    st.session_state.selected_route_index = 0
+if "fleet" not in st.session_state:
+    st.session_state.fleet = [{}]  # Each bus is a dict
+if "last_clicked_location" not in st.session_state:
+    st.session_state.last_clicked_location = None
+
+#Route Input Mode Selection
+st.title("EV Bus Route Designer")
+st.session_state.input_mode = st.radio("How would you like to define routes?", ["Interactive Map", "Upload CSV"], horizontal=True)
+
+# ------------------------------
+# EV Fleet Input
+# ------------------------------
+
+
+st.sidebar.header("Fleet Configuration")
+
+if "fleet" not in st.session_state:
+    st.session_state.fleet = [{}]  # Start with one empty bus input
+
+# Add button to append more buses (max 20)
+if len(st.session_state.fleet) < 20:
+    if st.sidebar.button("Add Another Bus"):
+        st.session_state.fleet.append({})
+
+# Iterate through each bus input block
+for i, bus in enumerate(st.session_state.fleet):
+    with st.sidebar.expander(f"Bus {i + 1}", expanded=True):
+        powertrain = st.selectbox(f"Powertrain", ["EV", "Gas"], key=f"powertrain_{i}")
+        bus_type = st.selectbox(f"Type", ["A", "C"], key=f"type_{i}")
+        make = st.text_input(f"Make", key=f"make_{i}")
+        quantity = st.number_input(f"Quantity", min_value=1, value=1, step=1, key=f"quantity_{i}")
+        battery_size = None
+        if powertrain == "EV":
+            battery_size = st.number_input(f"Battery Capacity (kWh)", min_value=1.0, value=200.0, key=f"battery_{i}")
+        
+        # Save to session state
+        st.session_state.fleet[i] = {
+            "Powertrain": powertrain,
+            "Type": bus_type,
+            "Quantity": quantity,
+            "Battery Capacity (kWh)": battery_size if powertrain == "EV" else None
+        }
+
+    fleet_data = pd.DataFrame(st.session_state.fleet)
+
+#Interactive Map Input Mode
+if st.session_state.input_mode == "Interactive Map":
+    from interactive_map_logic import handle_map_route_input
+    handle_map_route_input(st, folium, st_folium, zipcodes_df, zip_lookup)
+
+# ------------------------------
+# CSV Upload Route Input
+# ------------------------------
+elif st.session_state.input_mode == "Upload CSV":
+    st.subheader("Upload Your Route CSV")
+    uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
+    st.markdown("""
+    **CSV Format Required:**
+    - Columns: `Route`, `Location Type`, `Address`, 'Time', 'Sequence Number'
+    - Location Types: `Depot`, `Pickup`, `Dropoff`
+    - Time: First Pickup Time (at sequence 1), and Bell Time (at dropoff locations) HH:MM
+    """)
+
+    st.info("🔒 Uploaded files are processed in memory only and are not stored or shared.")
+
+    
+    st.markdown("""
+    **CSV Format Required:**
+
+    | Route | Location Type | Address                          | Time     | Sequence Number |
+    |-------|----------------|----------------------------------|----------|------------------|
+    | A123  | Depot          | 123 Main St, Bronx, NY 10451     |          | 0                |
+    | A123  | Pickup         | 456 1st Ave, Bronx, NY 10455     | 07:15 AM | 1                |
+    | A123  | Pickup         | 789 3rd Ave, Bronx, NY 10457     |          | 2                |
+    | A123  | Dropoff        | 101 School Rd, Bronx, NY 10460   | 08:00 AM | 3                |
+    | B321  | Depot          | 12 Depot Ln, Queens, NY 11368    |          | 0                |
+    | B321  | Pickup         | 200 Park Ave, Queens, NY 11369   | 07:25 AM | 1                |
+    | B321  | Dropoff        | 400 Academy St, Queens, NY 11370 | 08:10 AM | 2                |
+    """)
+
+    if uploaded_file:
+        try:
+            df = pd.read_csv(uploaded_file)
+            st.dataframe(df)
+
+            if st.button("Process CSV"):
+                google_maps_api_key = st.secrets.get("google_maps_api_key")
+                if not google_maps_api_key:
+                    st.error("Google Maps API key not found in secrets.")
+                else:
+                    route_dict = {}
+
+                    for _, row in df.iterrows():
+                        route_id = row['Route']
+                        location_type = row['Location Type']
+                        address = row['Address']
+                        time_str = row.get('Time', '')
+                        sequence = row.get('Sequence Number', None)
+
+                        try:
+                            response = requests.get(
+                                "https://maps.googleapis.com/maps/api/geocode/json",
+                                params={"address": address, "key": google_maps_api_key}
+                            )
+                            time.sleep(0.2)
+                            data = response.json()
+                            if data["status"] == "OK":
+                                location = data["results"][0]["geometry"]["location"]
+                                coords = (location["lat"], location["lng"])
+
+                                if route_id not in route_dict:
+                                    route_dict[route_id] = {
+                                        "route_id": route_id,
+                                        "depot": None,
+                                        "pickups": [],
+                                        "dropoffs": []
+                                    }
+
+                                parsed_time = None
+                                if pd.notna(time_str) and isinstance(time_str, str):
+                                    try:
+                                        parsed_time = datetime.datetime.strptime(time_str.strip(), "%I:%M %p").time()
+                                    except ValueError:
+                                        st.warning(f"Invalid time format for {address}: {time_str}")
+
+                                if location_type == "Depot":
+                                    route_dict[route_id]["depot"] = coords
+                                elif location_type == "Pickup":
+                                    route_dict[route_id]["pickups"].append({"location": coords, "pickup_time": parsed_time})
+                                elif location_type == "Dropoff":
+                                    route_dict[route_id]["dropoffs"].append({"location": coords, "bell_time": parsed_time})
+                            else:
+                                st.warning(f"Geocoding failed for {address}: {data['status']}")
+
+                        except Exception as geocode_error:
+                            st.warning(f"Failed to geocode: {address} - {geocode_error}")
+
+                    st.session_state.routes = list(route_dict.values())
+                    st.success("CSV processed successfully. Displaying parsed routes:")
+                    for r in st.session_state.routes:
+                        st.write(r)
+
+        except Exception as e:
+            st.error(f"Error reading CSV: {e}")
 
 # ------------------------------
 # Helper Functions
@@ -61,170 +213,8 @@ def get_min_temperature(location):
     return 35 if lat < 40 else 45
 
 # ------------------------------
-# Initialize Session State
+# Route Input
 # ------------------------------
-
-if "routes" not in st.session_state:
-    st.session_state.routes = []  # Each route is a dict
-if "selected_route_index" not in st.session_state:
-    st.session_state.selected_route_index = 0
-
-# ------------------------------
-# EV Fleet Input
-# ------------------------------
-
-
-st.sidebar.header("Fleet Configuration")
-
-if "fleet" not in st.session_state:
-    st.session_state.fleet = [{}]  # Start with one empty bus input
-
-# Add button to append more buses (max 20)
-if len(st.session_state.fleet) < 20:
-    if st.sidebar.button("Add Another Bus"):
-        st.session_state.fleet.append({})
-
-# Iterate through each bus input block
-for i, bus in enumerate(st.session_state.fleet):
-    with st.sidebar.expander(f"Bus {i + 1}", expanded=True):
-        powertrain = st.selectbox(f"Powertrain", ["EV", "Gas"], key=f"powertrain_{i}")
-        bus_type = st.selectbox(f"Type", ["A", "C"], key=f"type_{i}")
-        make = st.text_input(f"Make", key=f"make_{i}")
-        quantity = st.number_input(f"Quantity", min_value=1, value=1, step=1, key=f"quantity_{i}")
-        battery_size = None
-        if powertrain == "EV":
-            battery_size = st.number_input(f"Battery Capacity (kWh)", min_value=1.0, value=200.0, key=f"battery_{i}")
-        
-        # Save to session state
-        st.session_state.fleet[i] = {
-            "Powertrain": powertrain,
-            "Type": bus_type,
-            "Quantity": quantity,
-            "Battery Capacity (kWh)": battery_size if powertrain == "EV" else None
-        }
-
-    fleet_data = pd.DataFrame(st.session_state.fleet)
-
-    # ------------------------------
-# Route Input (Optimized Map - No Popups)
-# ------------------------------
-
-
-    st.header("Route Input")
-    st.write("Choose the route, marker type, and click on the map to add stops instantly.")
-
-    if "routes" not in st.session_state:
-        st.session_state.routes = []
-    if "selected_route_index" not in st.session_state:
-        st.session_state.selected_route_index = 0
-
-    if st.button("Add New Route"):
-        new_route = {
-            "route_id": len(st.session_state.routes) + 1,
-            "depot": None,
-            "pickups": [],
-            "dropoffs": []
-        }
-        st.session_state.routes.append(new_route)
-        st.session_state.selected_route_index = len(st.session_state.routes) - 1
-
-    if st.session_state.routes:
-        route_labels = [f"Route {r['route_id']}" for r in st.session_state.routes]
-        selected = st.selectbox("Select Route", options=route_labels, index=st.session_state.selected_route_index)
-        current_index = route_labels.index(selected)
-        st.session_state.selected_route_index = current_index
-        current_route = st.session_state.routes[current_index]
-
-        marker_type = st.radio("Marker Type", ["Depot", "Pickup", "Dropoff"])
-        zip_input = st.text_input("Jump to ZIP Code (centers the map)")
-
-        if "last_clicked_location" not in st.session_state:
-            st.session_state.last_clicked_location = None
-
-        # Map center logic
-        default_center = [40.7128, -74.0060]
-        center = current_route["depot"] or default_center
-        use_bounds = None
-
-        if zip_input.isdigit() and int(zip_input) in zip_lookup:
-            shape = zipcodes_df.loc[zipcodes_df["MODZCTA"] == int(zip_input), "geometry"].values[0]
-            bounds = shape.bounds
-            sw = [bounds[1], bounds[0]]
-            ne = [bounds[3], bounds[2]]
-            use_bounds = [sw, ne]
-            center = [(sw[0] + ne[0]) / 2, (sw[1] + ne[1]) / 2]
-
-        def create_simple_marker(location, label, color):
-            return folium.Marker(
-                location=location,
-                tooltip=label,
-                icon=folium.Icon(color=color)
-            )
-
-        m = folium.Map(location=center, zoom_start=13)
-        marker_group = folium.FeatureGroup(name="All Stops")
-
-        if current_route["depot"]:
-            marker_group.add_child(create_simple_marker(current_route["depot"], "Depot", "blue"))
-
-        for idx, pickup in enumerate(current_route["pickups"]):
-            marker_group.add_child(create_simple_marker(pickup, f"Pickup {idx+1}", "green"))
-
-        for idx, dropoff in enumerate(current_route["dropoffs"]):
-            marker_group.add_child(create_simple_marker(dropoff["location"], f"Dropoff {idx+1}", "red"))
-
-        m.add_child(marker_group)
-
-        if use_bounds:
-            m.fit_bounds(use_bounds)
-
-        map_key = f"main_map_route_{current_index}_v{len(current_route['pickups']) + len(current_route['dropoffs'])}"
-        map_data = st_folium(m, key=map_key, width=700, height=500)
-
-        # Handle new click
-        clicked = map_data.get("last_clicked")
-        if clicked:
-            latlng = (clicked["lat"], clicked["lng"])
-            if latlng != st.session_state.last_clicked_location:
-                st.session_state.last_clicked_location = latlng
-
-                if marker_type == "Depot":
-                    current_route["depot"] = latlng
-                elif marker_type == "Pickup":
-                    current_route["pickups"].append(latlng)
-                elif marker_type == "Dropoff":
-                    current_route["dropoffs"].append({"location": latlng, "bell_time": None})
-
-                st.rerun()
-
-        # Sidebar-style UI for editing pickups and dropoffs
-        st.subheader("Pickups")
-        for i, pt in enumerate(current_route["pickups"]):
-            cols = st.columns([5, 1])
-            cols[0].write(f"📍 Pickup {i+1}: {pt}")
-            if cols[1].button("Remove", key=f"remove_pickup_{i}"):
-                current_route["pickups"].pop(i)
-                st.rerun()
-
-        st.subheader("Dropoffs")
-        for i, pt in enumerate(current_route["dropoffs"]):
-            cols = st.columns([5, 1])
-            cols[0].write(f"🎯 Dropoff {i+1}: {pt['location']}")
-            if cols[1].button("Remove", key=f"remove_dropoff_{i}"):
-                current_route["dropoffs"].pop(i)
-                st.rerun()
-
-        if current_route["dropoffs"]:
-            st.write("### Set Bell Times for Dropoffs")
-            for idx, dropoff in enumerate(current_route["dropoffs"]):
-                default_time = dropoff["bell_time"] if dropoff["bell_time"] else datetime.time(8, 0)
-                bell_time = st.time_input(f"Bell Time for Dropoff {idx+1}", value=default_time, key=f"bell_time_{current_index}_{idx}")
-                current_route["dropoffs"][idx]["bell_time"] = bell_time
-
-        st.write("**Current Route Data:**", current_route)
-    else:
-        st.info("No routes added yet. Click 'Add New Route' to start.")
-
 
 # ------------------------------
 # Route Calculation and Feasibility Check
