@@ -182,7 +182,7 @@ elif st.session_state.input_mode == "Upload CSV":
 
 def get_route_distance(api_key, origin, waypoints, destination, departure_time=None):
     """
-    Uses the Google Maps Directions API to compute total driving distance.
+    Uses the Google Maps Directions API to compute total driving distance, duration, and leg details.
     """
     import datetime
 
@@ -199,12 +199,11 @@ def get_route_distance(api_key, origin, waypoints, destination, departure_time=N
     origin = normalize_location(origin)
     destination = normalize_location(destination)
 
-    # Calculate next Monday at the provided departure_time
     if departure_time is None:
         departure_time = datetime.time(7, 0)
 
     now = datetime.datetime.now()
-    days_ahead = (7 - now.weekday()) % 7 or 7  # next Monday
+    days_ahead = (7 - now.weekday()) % 7 or 7
     next_monday = now + datetime.timedelta(days=days_ahead)
     departure_datetime = datetime.datetime.combine(next_monday.date(), departure_time)
     departure_unix = int(departure_datetime.timestamp())
@@ -223,12 +222,25 @@ def get_route_distance(api_key, origin, waypoints, destination, departure_time=N
     st.write("**[Debug] Requesting route from Google Maps with parameters:**", params)
     response = requests.get(base_url, params=params)
     data = response.json()
+
     if data["status"] == "OK":
-        total_distance = sum(leg["distance"]["value"] for leg in data["routes"][0]["legs"]) / 1609.34
-        return total_distance
+        legs = data["routes"][0]["legs"]
+        total_distance = sum(leg["distance"]["value"] for leg in legs) / 1609.34
+        total_duration = sum(leg["duration"]["value"] for leg in legs) / 60
+
+        leg_details = [{
+            "Start Address": leg["start_address"],
+            "End Address": leg["end_address"],
+            "Distance (mi)": round(leg["distance"]["value"] / 1609.34, 2),
+            "Duration (min)": round(leg["duration"]["value"] / 60, 1)
+        } for leg in legs]
+
+        return total_distance, total_duration, leg_details
+
     else:
         st.write("**[Error] Google Maps API response:**", data.get("error_message", data["status"]))
-        return None
+        return None, None, []
+
 
 
 def get_min_temperature(location):
@@ -257,69 +269,69 @@ except KeyError:
     google_maps_api_key = None
 
 if st.button("Calculate Route Feasibility") and google_maps_api_key:
-    results = []  # store feasibility results for each route
-    efficiency = 2.5  # assumed miles per kWh
+    results = []
+    efficiency = 2.5  # miles per kWh
 
     for route in st.session_state.routes:
-        st.write(f"**[Debug] Processing Route {route['route_id']}**")
+        st.write(f"### Route {route['route_id']}")
+
         if not route["depot"]:
-            st.write(f"Route {route['route_id']}: Depot not set.")
+            st.warning("Depot not set.")
             continue
         if not route["dropoffs"]:
-            st.write(f"Route {route['route_id']}: No school dropoffs set.")
+            st.warning("No school dropoffs set.")
             continue
 
-        # Use the first dropoff as final destination (for demo purposes)
-        destination = route["dropoffs"][0]["location"] if route["dropoffs"][0]["location"] else route["depot"]
+        destination = route["dropoffs"][0]["location"]
         waypoints = []
+
         if route["pickups"]:
             waypoints.extend(route["pickups"])
         if len(route["dropoffs"]) > 1:
-            for d in route["dropoffs"][1:]:
-                if d["location"]:
-                    waypoints.append(d["location"])
-        
-        st.write(f"**[Debug] Route {route['route_id']} waypoints:**", waypoints)
+            waypoints.extend([d["location"] for d in route["dropoffs"][1:] if d.get("location")])
+
         first_pickup_time = None
         if route["pickups"] and isinstance(route["pickups"][0], dict):
             first_pickup_time = route["pickups"][0].get("pickup_time")
 
-        total_distance = get_route_distance(
-            google_maps_api_key, route["depot"], waypoints, destination, departure_time=first_pickup_time
+        total_distance, total_duration, leg_details = get_route_distance(
+            google_maps_api_key,
+            route["depot"],
+            waypoints,
+            destination,
+            departure_time=first_pickup_time
         )
 
         if total_distance is None:
-            st.write(f"Route {route['route_id']}: Failed to calculate route distance.")
+            st.warning("Failed to calculate route distance.")
             continue
-        st.write(f"**Route {route['route_id']} total distance:** {total_distance:.2f} miles")
-        
-        effective_range = fleet_data["Battery Capacity (kWh)"] * 0.6 * efficiency
-        
+
+        battery_capacity = fleet_data["Battery Capacity (kWh)"].iloc[0]
+        effective_range = battery_capacity * 0.6 * efficiency
         min_temp = get_min_temperature(route["depot"])
-        st.write(f"**Route {route['route_id']} depot min temperature:** {min_temp}°F")
+
         if min_temp < 40:
             effective_range *= 0.8
-            st.write("**[Info] Temperature below 40°F: Effective range reduced by 20%.**")
-        
-        feasible = total_distance <= effective_range
-        results.append({
+
+        # Store all leg data directly inside the feasibility result
+        route["feasibility"] = {
             "Route ID": route["route_id"],
             "Total Distance (miles)": round(total_distance, 2),
+            "Total Duration (min)": round(total_duration, 1),
             "Effective Range (miles)": round(effective_range, 2),
-            "Feasible": "Yes" if total_distance <= float(effective_range) else "No"
-        })
+            "Min Temp (°F)": min_temp,
+            "Feasible": "Yes" if total_distance <= effective_range else "No",
+            "Leg Details": leg_details
+        }
+        route["leg_details"] = leg_details
+        results.append(route["feasibility"])
+
     
     if results:
-        results_df = pd.DataFrame(results)
-        st.subheader("Route Feasibility Results")
-        st.table(results_df)
-
-        # Plot a simulated range curve
-        temps = list(range(20, 81, 5))
-        ranges = [fleet_data["Battery Capacity (kWh)"] * 0.6 * efficiency * (0.8 if t < 40 else 1.0) for t in temps]
-        fig, ax = plt.subplots()
-        ax.plot(temps, ranges)
-        ax.set_xlabel("Temperature (°F)")
-        ax.set_ylabel("Effective Range (miles)")
-        ax.set_title("EV Effective Range vs. Temperature")
-        st.pyplot(fig)
+        st.subheader("Feasibility Summary")
+        st.dataframe(pd.DataFrame(results))
+        with st.expander(f"Leg Breakdown for Route {route['route_id']}"):
+            st.dataframe(pd.DataFrame(leg_details))
+        if leg_details:
+            st.write("### Route Leg Details")
+            st.dataframe(pd.DataFrame(leg_details))
