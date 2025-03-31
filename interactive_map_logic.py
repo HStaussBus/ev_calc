@@ -73,7 +73,10 @@ def handle_map_route_input(st, folium, st_folium, zipcodes_df, zip_lookup):
                 if marker_type == "Depot":
                     current_route["depot"] = latlng
                 elif marker_type == "Pickup":
-                    current_route["pickups"].append(latlng)
+                    current_route["pickups"].append({
+                        "location": latlng,
+                        "pickup_time": None
+                    })
                 elif marker_type == "Dropoff":
                     current_route["dropoffs"].append({"location": latlng, "bell_time": None})
 
@@ -120,4 +123,3 @@ def handle_map_route_input(st, folium, st_folium, zipcodes_df, zip_lookup):
         st.write("**Current Route Data:**", current_route)
     else:
         st.info("No routes added yet. Click 'Add New Route' to start.")
-

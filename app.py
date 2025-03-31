@@ -148,9 +148,13 @@ elif st.session_state.input_mode == "Upload CSV":
                                 parsed_time = None
                                 if pd.notna(time_str) and isinstance(time_str, str):
                                     try:
-                                        parsed_time = datetime.datetime.strptime(time_str.strip(), "%I:%M %p").time()
+                                        parsed_time = datetime.datetime.strptime(time_str.strip(), "%H:%M").time()
                                     except ValueError:
-                                        st.warning(f"Invalid time format for {address}: {time_str}")
+                                        try:
+                                            parsed_time = datetime.datetime.strptime(time_str.strip() + " AM", "%I:%M %p").time()
+                                        except ValueError:
+                                            st.warning(f"Invalid time format for {address}: {time_str}")
+
 
                                 if location_type == "Depot":
                                     route_dict[route_id]["depot"] = coords
@@ -176,33 +180,56 @@ elif st.session_state.input_mode == "Upload CSV":
 # Helper Functions
 # ------------------------------
 
-def get_route_distance(api_key, origin, waypoints, destination):
+def get_route_distance(api_key, origin, waypoints, destination, departure_time=None):
     """
     Uses the Google Maps Directions API to compute total driving distance.
     """
+    import datetime
+
+    def normalize_location(point):
+        return point["location"] if isinstance(point, dict) else point
+
     base_url = "https://maps.googleapis.com/maps/api/directions/json"
-    # Create the waypoints string if waypoints exist
-    waypoints_str = "|".join([f"{wp[0]},{wp[1]}" for wp in waypoints]) if waypoints else ""
+
+    waypoints_str = "|".join([
+        f"{normalize_location(wp)[0]},{normalize_location(wp)[1]}"
+        for wp in waypoints
+    ]) if waypoints else ""
+
+    origin = normalize_location(origin)
+    destination = normalize_location(destination)
+
+    # Calculate next Monday at the provided departure_time
+    if departure_time is None:
+        departure_time = datetime.time(7, 0)
+
+    now = datetime.datetime.now()
+    days_ahead = (7 - now.weekday()) % 7 or 7  # next Monday
+    next_monday = now + datetime.timedelta(days=days_ahead)
+    departure_datetime = datetime.datetime.combine(next_monday.date(), departure_time)
+    departure_unix = int(departure_datetime.timestamp())
+
     params = {
         "origin": f"{origin[0]},{origin[1]}",
         "destination": f"{destination[0]},{destination[1]}",
         "waypoints": waypoints_str,
+        "optimizeWaypoints": "false",
         "key": api_key,
         "mode": "driving",
         "traffic_model": "best_guess",
-        "departure_time": "now"  # Added parameter to satisfy API requirements
+        "departure_time": departure_unix
     }
+
     st.write("**[Debug] Requesting route from Google Maps with parameters:**", params)
     response = requests.get(base_url, params=params)
     data = response.json()
     if data["status"] == "OK":
-        total_distance = 0
-        for leg in data["routes"][0]["legs"]:
-            total_distance += leg["distance"]["value"] / 1609.34  # convert meters to miles
+        total_distance = sum(leg["distance"]["value"] for leg in data["routes"][0]["legs"]) / 1609.34
         return total_distance
     else:
         st.write("**[Error] Google Maps API response:**", data.get("error_message", data["status"]))
         return None
+
 
 def get_min_temperature(location):
     """
@@ -253,7 +280,14 @@ if st.button("Calculate Route Feasibility") and google_maps_api_key:
                     waypoints.append(d["location"])
         
         st.write(f"**[Debug] Route {route['route_id']} waypoints:**", waypoints)
-        total_distance = get_route_distance(google_maps_api_key, route["depot"], waypoints, destination)
+        first_pickup_time = None
+        if route["pickups"] and isinstance(route["pickups"][0], dict):
+            first_pickup_time = route["pickups"][0].get("pickup_time")
+
+        total_distance = get_route_distance(
+            google_maps_api_key, route["depot"], waypoints, destination, departure_time=first_pickup_time
+        )
+
         if total_distance is None:
             st.write(f"Route {route['route_id']}: Failed to calculate route distance.")
             continue
@@ -272,7 +306,7 @@ if st.button("Calculate Route Feasibility") and google_maps_api_key:
             "Route ID": route["route_id"],
             "Total Distance (miles)": round(total_distance, 2),
             "Effective Range (miles)": round(effective_range, 2),
-            "Feasible": "Yes" if feasible else "No"
+            "Feasible": "Yes" if total_distance <= float(effective_range) else "No"
         })
     
     if results:
