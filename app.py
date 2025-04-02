@@ -310,6 +310,8 @@ if st.session_state.view_mode == "Main":
         st.session_state.fleet_data = fleet_data
 
     st.title("Electric Bus Route Planning")
+    st.markdown("Welcome to the NYCSBUS EV Route Machine. Please define your fleet to the left. You can either enter routes through a CSV file or by interactive map.")
+    st.markdown("Once your routes and buses are entered, click *Process Route Electrification* to begin developing a plan.")
 
     st.session_state.input_mode = st.radio("How would you like to define routes?", ["Interactive Map", "Upload CSV"], horizontal=True)
     
@@ -328,10 +330,10 @@ if st.session_state.view_mode == "Main":
         **CSV Format Required:**
         - Columns: `Route`, `Location Type`, `Address`, 'Time', 'Sequence Number'
         - Location Types: `Depot`, `Pickup`, `Dropoff`
-        - Time: First Pickup Time (at sequence 1), and Bell Time (at dropoff locations) HH:MM
+        - Time: Time (school start time, only at Dropoff Locations) HH:MM
         """)
 
-        st.info("🔒 Uploaded files are processed in memory only and are not stored or shared.")
+        st.info("🔒 Uploaded files are processed in memory only and are not stored or shared. Click 'Process CSV' to ensure your data is in the correct format. Then, click GO!")
 
         
         st.markdown("""
@@ -340,12 +342,12 @@ if st.session_state.view_mode == "Main":
         | Route | Location Type | Address                          | Time     | Sequence Number |
         |-------|----------------|----------------------------------|----------|------------------|
         | A123  | Depot          | 123 Main St, Bronx, NY 10451     |          | 0                |
-        | A123  | Pickup         | 456 1st Ave, Bronx, NY 10455     | 07:15 AM | 1                |
+        | A123  | Pickup         | 456 1st Ave, Bronx, NY 10455     |          | 1                |
         | A123  | Pickup         | 789 3rd Ave, Bronx, NY 10457     |          | 2                |
-        | A123  | Dropoff        | 101 School Rd, Bronx, NY 10460   | 08:00 AM | 3                |
+        | A123  | Dropoff        | 101 School Rd, Bronx, NY 10460   | 08:00    | 3                |
         | B321  | Depot          | 12 Depot Ln, Queens, NY 11368    |          | 0                |
-        | B321  | Pickup         | 200 Park Ave, Queens, NY 11369   | 07:25 AM | 1                |
-        | B321  | Dropoff        | 400 Academy St, Queens, NY 11370 | 08:10 AM | 2                |
+        | B321  | Pickup         | 200 Park Ave, Queens, NY 11369   |          | 1                |
+        | B321  | Dropoff        | 400 Academy St, Queens, NY 11370 | 08:10    | 2                |
         """)
 
         if uploaded_file:
@@ -410,9 +412,9 @@ if st.session_state.view_mode == "Main":
                                 st.warning(f"Failed to geocode: {address} - {geocode_error}")
 
                         st.session_state.routes = list(route_dict.values())
-                        st.success("CSV processed successfully. Displaying parsed routes:")
-                        for r in st.session_state.routes:
-                            st.write(r)
+                        st.success("CSV processed successfully.")
+                        #for r in st.session_state.routes:
+                            #st.write(r)
 
             except Exception as e:
                 st.error(f"Error reading CSV: {e}")
@@ -439,12 +441,12 @@ if st.session_state.view_mode == "Main":
         st.error("Google Maps API key not found in secrets. Please add it to your Streamlit secrets.")
         google_maps_api_key = None
 
-    if st.button("Calculate Route Feasibility") and google_maps_api_key:
+    if st.button("Process Routes for Electrification") and google_maps_api_key:
         results = []
         efficiency = 2.5  # miles per kWh
 
         for route in st.session_state.routes:
-            st.write(f"### Route {route['route_id']}")
+            #st.write(f"### Route {route['route_id']}")
 
             if not route["depot"]:
                 st.warning("Depot not set.")
@@ -561,15 +563,17 @@ if st.session_state.view_mode == "Main":
             results.append(route["feasibility"])
             st.session_state.results = results
 
+            switch_view("EV Route Planning")
+
 
             # Show per-route debug info
-            st.write(f"**Feasibility for Route {route['route_id']}:**")
-            st.json(route["feasibility"])  # Cleaner than raw dict print
+            #st.write(f"**Feasibility for Route {route['route_id']}:**")
+            #st.json(route["feasibility"])  # Cleaner than raw dict print
 
-        st.markdown("---")
+        #st.markdown("---")
 
-    if st.button("Calculate EV Route Planning", key="ev_plan_button"):
-            switch_view("EV Route Planning")
+    #if st.button("Calculate EV Route Planning", key="ev_plan_button"):
+            #switch_view("EV Route Planning")
     st.markdown("---")
     if st.button("🔁 Reset App"):
         for key in list(st.session_state.keys()):

@@ -136,6 +136,6 @@ def handle_map_route_input(st, folium, st_folium, zipcodes_df, zip_lookup):
             
 
         st.info("\U0001F512 Route data is processed in memory only and is not stored or shared.")
-        st.write("**Current Route Data:**", current_route)
+        #st.write("**Current Route Data:**", current_route)
     else:
         st.info("No routes added yet. Click 'Add New Route' to start.")
