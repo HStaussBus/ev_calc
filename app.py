@@ -378,9 +378,9 @@ if st.session_state.view_mode == "Main":
         uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
         st.markdown("""
         **CSV Format Required:**
-        - Columns: `Route`, `Location Type`, `Address`, 'Time', 'Sequence Number'
+        - Columns: `Route`, `Location Type`, `Address`, `Time`, `Sequence Number`
         - Location Types: `Depot`, `Pickup`, `Dropoff`
-        - Time: Time (school start time, only at Dropoff Locations) HH:MM
+        - Time: School Start Time HH:MM
         """)
 
         st.info("🔒 Uploaded files are processed in memory only and are not stored or shared. Click 'Process CSV' to ensure your data is in the correct format. Then, click GO!")
