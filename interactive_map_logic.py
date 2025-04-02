@@ -8,22 +8,43 @@ def handle_map_route_input(st, folium, st_folium, zipcodes_df, zip_lookup):
     st.header("Route Input")
     st.write("Choose the route, marker type, and click on the map to add stops instantly.")
 
-    if st.button("Add New Route"):
-        new_route = {
-            "route_id": len(st.session_state.routes) + 1,
-            "depot": None,
-            "pickups": [],
-            "dropoffs": []
-        }
-        st.session_state.routes.append(new_route)
-        st.session_state.selected_route_index = len(st.session_state.routes) - 1
+    with st.expander("Add New Route"):
+        route_name_input = st.text_input("Route Name", key="new_route_name")
+        if st.button("Create Route", key="create_route_button") and route_name_input:
+            new_route = {
+                "route_id": route_name_input.strip(),
+                "depot": None,
+                "pickups": [],
+                "dropoffs": []
+            }
+            st.session_state.routes.append(new_route)
+            st.session_state.selected_route_index = len(st.session_state.routes) - 1
+            st.success(f"Route '{route_name_input}' added!")
+            st.rerun()
+
 
     if st.session_state.routes:
         route_labels = [f"Route {r['route_id']}" for r in st.session_state.routes]
+        # Ensure index is valid
+        if st.session_state.selected_route_index >= len(st.session_state.routes):
+            st.session_state.selected_route_index = 0
+
         selected = st.selectbox("Select Route", options=route_labels, index=st.session_state.selected_route_index)
         current_index = route_labels.index(selected)
         st.session_state.selected_route_index = current_index
         current_route = st.session_state.routes[current_index]
+
+        if st.button("🗑️ Delete Selected Route"):
+            del st.session_state.routes[current_index]
+            
+            # Re-clamp the index to stay within bounds
+            if len(st.session_state.routes) == 0:
+                st.session_state.selected_route_index = 0
+            else:
+                st.session_state.selected_route_index = max(0, current_index - 1)
+
+            st.rerun()
+
 
         marker_type = st.radio("Marker Type", ["Depot", "Pickup", "Dropoff"])
         zip_input = st.text_input("Jump to ZIP Code (centers the map)")
@@ -74,14 +95,13 @@ def handle_map_route_input(st, folium, st_folium, zipcodes_df, zip_lookup):
                     current_route["depot"] = latlng
                 elif marker_type == "Pickup":
                     current_route["pickups"].append({
-                        "location": latlng,
-                        "pickup_time": None
+                        "location": latlng
                     })
                 elif marker_type == "Dropoff":
                     current_route["dropoffs"].append({"location": latlng, "bell_time": None})
 
                 st.rerun()
-
+        st.write(f"### Current Route Data - Route {current_route['route_id']}")
         st.subheader("Pickups")
         for i, pt in enumerate(current_route["pickups"]):
             cols = st.columns([5, 1])
@@ -111,13 +131,9 @@ def handle_map_route_input(st, folium, st_folium, zipcodes_df, zip_lookup):
             # Replace tuple with dictionary to support metadata
             if isinstance(current_route["pickups"][0], tuple):
                 current_route["pickups"][0] = {
-                    "location": current_route["pickups"][0],
-                    "pickup_time": None
+                    "location": current_route["pickups"][0]
                 }
-            first_pickup = current_route["pickups"][0]
-            default_time = first_pickup["pickup_time"] if first_pickup["pickup_time"] else datetime.time(7, 0)
-            pickup_time = st.time_input(f"First Pickup Time for Route {current_route['route_id']}", value=default_time, key=f"pickup_time_{current_index}")
-            current_route["pickups"][0]["pickup_time"] = pickup_time
+            
 
         st.info("\U0001F512 Route data is processed in memory only and is not stored or shared.")
         st.write("**Current Route Data:**", current_route)
