@@ -89,10 +89,60 @@ if st.session_state.view_mode == "EV Route Planning":
                     "Percent in DAC": percent_in_dac,
                     "Suggested Departure Time": suggested_time
                 })
+            def has_value(x):
+                if isinstance(x, list):
+                    return len(x) > 0
+                return pd.notna(x) and str(x).strip() != "" and str(x).lower() != "nan"
+            
+            def classify_eligibility(row):
+                in_dac = row.get("Percent in DAC", 0) > 70
+
+                cold = row.get("Eligible Buses < 50°F")
+                mild = row.get("Eligible Buses 50–70°F")
+                warm = row.get("Eligible Buses 70°F+")
+
+                if in_dac and has_value(cold):
+                    return "Preferred - All Weather"
+                elif has_value(cold):
+                    return "OK in All Weather"
+                elif has_value(mild):
+                    return "OK in >50 Degree Weather"
+                elif has_value(warm):
+                    return "OK in >70 Degree Weather"
+                else:
+                    return "NOT OK"
+
+
+            # Define sort order
+            eligibility_order = {
+                "Preferred - All Weather": 0,
+                "OK in All Weather": 1,
+                "OK in >50 degree weather": 2,
+                "OK in >70 degree weather": 3,
+                "NOT OK": 4
+            }
+
 
             if plan_results:
+
+                plan_results = pd.DataFrame(plan_results)
+
+                plan_results["EV Eligibility"] = plan_results.apply(classify_eligibility, axis=1)
+                plan_results["Eligibility Rank"] = plan_results["EV Eligibility"].map(eligibility_order)
+
+                # Sort by EV Eligibility priority
+                
+
+
+                plan_results["Eligibility Rank"] = plan_results["EV Eligibility"].map(eligibility_order)
+
+                
+                plan_results = plan_results.sort_values(by="Eligibility Rank").drop(columns=["Eligibility Rank"])
+                plan_results = plan_results[['Route ID', 'Type Required', 'EV Eligibility', 'Suggested Departure Time', 'Percent in DAC', 'Round Trip (mi)', 'Eligible Buses < 50°F', 'Eligible Buses 50–70°F', 'Eligible Buses 70°F+']]
+                plan_results.columns = ['Route ID', 'Bus Type', 'EV Eligibility', 'Suggested Departure Time', f'% in Disadvantaged Communities', 'Round Trip (mi)', 'Eligible Buses < 50°F', 'Eligible Buses 50–70°F', 'Eligible Buses 70°F+']
+
                 st.subheader("🚌 EV Route Summary")
-                st.dataframe(pd.DataFrame(plan_results))
+                st.dataframe(plan_results)
                 st.subheader("🚌 EV Bus Range Summary")
                 st.dataframe(st.session_state.ev_fleet)
             else:
@@ -562,8 +612,9 @@ if st.session_state.view_mode == "Main":
             route["leg_details"] = leg_details
             results.append(route["feasibility"])
             st.session_state.results = results
-
-            switch_view("EV Route Planning")
+        
+        switch_view("EV Route Planning")
+            
 
 
             # Show per-route debug info
