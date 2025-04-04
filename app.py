@@ -258,7 +258,7 @@ def load_spatial_data():
     Loads zipcode data (lat/lon) from uszips.csv and DAC spatial data.
     Returns zipcode df, zip lookup dict, and DAC GeoDataFrame (or None).
     """
-    st.write("DEBUG: Entering load_spatial_data...")
+    #st.write("DEBUG: Entering load_spatial_data...")
     zipcodes_df = pd.DataFrame()
     zip_lookup = {}
     # Initialize the variable that will be returned
@@ -266,10 +266,10 @@ def load_spatial_data():
 
     try:
         # --- Load and Process New Zipcode Data ---
-        st.write("DEBUG: Attempting to load zipcode data...")
+        #st.write("DEBUG: Attempting to load zipcode data...")
         zip_file_path = ".data/uszips.csv"
         zipcodes_df = pd.read_csv(zip_file_path, dtype={'zip': str})
-        st.write(f"DEBUG: Zipcode file read. Shape: {zipcodes_df.shape}")
+        #st.write(f"DEBUG: Zipcode file read. Shape: {zipcodes_df.shape}")
 
         required_zip_cols = ['zip', 'lat', 'lng']
         if not all(col in zipcodes_df.columns for col in required_zip_cols):
@@ -279,13 +279,13 @@ def load_spatial_data():
             zipcodes_df['zip'] = zipcodes_df['zip'].astype(str).str.zfill(5)
             zipcodes_df.rename(columns={'lat': 'latitude', 'lng': 'longitude'}, inplace=True)
             zip_lookup = zipcodes_df.set_index('zip')[['latitude', 'longitude']].to_dict("index")
-            st.write("DEBUG: Zipcode processing complete. Lookup created.")
+            #st.write("DEBUG: Zipcode processing complete. Lookup created.")
 
         # --- Load and Process DAC Data ---
-        st.write("DEBUG: Attempting to load DAC data...")
+        #st.write("DEBUG: Attempting to load DAC data...")
         dac_file_path = ".data/dac_file.csv"
         dac_locs_raw = pd.read_csv(dac_file_path)
-        st.write(f"DEBUG: DAC file read. Shape: {dac_locs_raw.shape}")
+        #st.write(f"DEBUG: DAC file read. Shape: {dac_locs_raw.shape}")
 
         dac_locs = dac_locs_raw[dac_locs_raw['DAC_Designation'] == 'Designated as DAC'].copy()
         required_dac_cols = ['the_geom', 'GEOID']
@@ -298,7 +298,7 @@ def load_spatial_data():
                 except Exception: return None
             dac_locs['multipolygon'] = dac_locs['the_geom'].apply(safe_wkt_load)
             dac_locs = dac_locs.dropna(subset=['multipolygon'])
-            st.write(f"DEBUG: DAC WKT loaded. Shape after dropna: {dac_locs.shape}")
+            #st.write(f"DEBUG: DAC WKT loaded. Shape after dropna: {dac_locs.shape}")
 
             if not dac_locs.empty:
                 try:
@@ -309,38 +309,38 @@ def load_spatial_data():
 
                      if dac_locs_gdf.empty:
                           st.warning("No valid DAC locations after GDF processing.")
-                          st.write("DEBUG: dac_locs_gdf became empty after .is_valid check.") # DEBUG
+                          #st.write("DEBUG: dac_locs_gdf became empty after .is_valid check.") # DEBUG
                           # Ensure it's None if empty after filtering
                           dac_locs_gdf = None
-                     else:
-                          st.write(f"DEBUG: DAC GeoDataFrame assigned successfully. Shape: {dac_locs_gdf.shape}") # DEBUG
+                     #else:
+                          #st.write(f"DEBUG: DAC GeoDataFrame assigned successfully. Shape: {dac_locs_gdf.shape}") # DEBUG
                 except Exception as gdf_error:
                      st.error(f"Error creating DAC GeoDataFrame: {gdf_error}")
-                     st.write(f"DEBUG: Error during GDF creation: {gdf_error}") # DEBUG
+                     #st.write(f"DEBUG: Error during GDF creation: {gdf_error}") # DEBUG
                      dac_locs_gdf = None # Ensure None on error
             else:
                  st.warning("No valid DAC locations found after initial processing.")
-                 st.write("DEBUG: dac_locs DataFrame was empty before GDF creation.") # DEBUG
+                 #st.write("DEBUG: dac_locs DataFrame was empty before GDF creation.") # DEBUG
 
     except FileNotFoundError as e:
         st.error(f"Error loading data file: {e}. Ensure files exist in '.data/'")
-        st.write(f"DEBUG: Caught FileNotFoundError: {e}") # DEBUG
+        #st.write(f"DEBUG: Caught FileNotFoundError: {e}") # DEBUG
         return pd.DataFrame(), {}, None
     except ImportError as e:
          st.error(f"Missing required spatial libraries: {e}")
-         st.write(f"DEBUG: Caught ImportError: {e}") # DEBUG
+         #st.write(f"DEBUG: Caught ImportError: {e}") # DEBUG
          return zipcodes_df, zip_lookup, None
     except Exception as e:
         st.error(f"An unexpected error occurred during data loading: {e}")
-        st.write(f"DEBUG: Caught general Exception: {e}") # DEBUG
+        #st.write(f"DEBUG: Caught general Exception: {e}") # DEBUG
         st.error(traceback.format_exc())
         # Return current state, dac_locs_gdf might be None
         return zipcodes_df, zip_lookup, dac_locs_gdf
 
     # Final check before returning
-    st.write(f"DEBUG: Exiting load_spatial_data. dac_locs_gdf is None? {dac_locs_gdf is None}")
-    if dac_locs_gdf is not None:
-         st.write(f"DEBUG: Type of dac_locs_gdf: {type(dac_locs_gdf)}, Shape: {dac_locs_gdf.shape}")
+    #st.write(f"DEBUG: Exiting load_spatial_data. dac_locs_gdf is None? {dac_locs_gdf is None}")
+    #if dac_locs_gdf is not None:
+         #st.write(f"DEBUG: Type of dac_locs_gdf: {type(dac_locs_gdf)}, Shape: {dac_locs_gdf.shape}")
 
     # Return the potentially updated dac_locs_gdf
     return zipcodes_df, zip_lookup, dac_locs_gdf
