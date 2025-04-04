@@ -329,10 +329,10 @@ st.markdown("Welcome to the NYCSBUS EV Route Machine. Follow the steps below.")
 
 # --- TABS IMPLEMENTATION ---
 tab1, tab2, tab3, tab4 = st.tabs([
-    "1. Setup & Fleet",
-    "2. Define Routes",
-    "3. Process & Assign",
-    "4. Review Plan & Map"
+    "1. Step 1 - Setup & Fleet",
+    "2. Step 2 - Define Routes",
+    "3. Step 3 - Process & Assign",
+    "4. Setp 4 - Review Plan & Map"
 ])
 
 # =======================================
