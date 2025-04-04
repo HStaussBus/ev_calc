@@ -252,98 +252,97 @@ def convert_df_to_csv(df): # Helper for download button later
     return output.getvalue().encode('utf-8')
 
 # ------------------------ Load Data (Do this once) ---------------------
-@st.cache_data # Cache the data loading
+@st.cache_data
 def load_spatial_data():
     """
     Loads zipcode data (lat/lon) from uszips.csv and DAC spatial data.
-
-    Returns:
-        tuple: (
-            pandas.DataFrame: zipcodes_df containing 'zip', 'latitude', 'longitude'.
-            dict: zip_lookup mapping 5-digit zip string to {'latitude': lat, 'longitude': lon}.
-            geopandas.GeoDataFrame: dac_locs_gdf containing DAC geometries, or None if loading fails.
-        )
+    Returns zipcode df, zip lookup dict, and DAC GeoDataFrame (or None).
     """
-    zipcodes_df = pd.DataFrame() # Initialize empty DataFrame
-    zip_lookup = {} # Initialize empty dict
-    dac_locs_gdf = None # Initialize as None
+    st.write("DEBUG: Entering load_spatial_data...")
+    zipcodes_df = pd.DataFrame()
+    zip_lookup = {}
+    # Initialize the variable that will be returned
+    dac_locs_gdf = None
 
     try:
         # --- Load and Process New Zipcode Data ---
+        st.write("DEBUG: Attempting to load zipcode data...")
         zip_file_path = ".data/uszips.csv"
-        # Read CSV, ensuring 'zip' column is treated as string to preserve leading zeros
         zipcodes_df = pd.read_csv(zip_file_path, dtype={'zip': str})
+        st.write(f"DEBUG: Zipcode file read. Shape: {zipcodes_df.shape}")
 
-        # Validate required columns exist
         required_zip_cols = ['zip', 'lat', 'lng']
         if not all(col in zipcodes_df.columns for col in required_zip_cols):
             missing_cols_str = ", ".join(c for c in required_zip_cols if c not in zipcodes_df.columns)
-            st.error(f"Zipcode file '{zip_file_path}' is missing required columns: {missing_cols_str}")
-            # Return defaults, DAC might still load below
-            # return pd.DataFrame(), {}, None # Option 1: Return immediately
+            st.error(f"Zipcode file '{zip_file_path}' missing required columns: {missing_cols_str}")
         else:
-            # Ensure all zip codes are 5 characters long with leading zeros
-            zipcodes_df.rename(columns={'lat': 'latitude', 'lng': 'longitude'}, inplace=True)
             zipcodes_df['zip'] = zipcodes_df['zip'].astype(str).str.zfill(5)
-
-            # Create the lookup dictionary: zip_string -> {lat: y, lon: x}
-            # Set index AFTER padding zip codes
+            zipcodes_df.rename(columns={'lat': 'latitude', 'lng': 'longitude'}, inplace=True)
             zip_lookup = zipcodes_df.set_index('zip')[['latitude', 'longitude']].to_dict("index")
-            #st.success(f"Successfully loaded and processed {len(zipcodes_df)} zip codes.") # Success message
+            st.write("DEBUG: Zipcode processing complete. Lookup created.")
 
-
-        # --- Load and Process DAC Data (Logic remains unchanged) ---
+        # --- Load and Process DAC Data ---
+        st.write("DEBUG: Attempting to load DAC data...")
         dac_file_path = ".data/dac_file.csv"
         dac_locs_raw = pd.read_csv(dac_file_path)
+        st.write(f"DEBUG: DAC file read. Shape: {dac_locs_raw.shape}")
 
         dac_locs = dac_locs_raw[dac_locs_raw['DAC_Designation'] == 'Designated as DAC'].copy()
-        required_dac_cols = ['the_geom', 'GEOID'] # Keep original required columns for DAC
+        required_dac_cols = ['the_geom', 'GEOID']
         if not all(col in dac_locs.columns for col in required_dac_cols):
              st.error(f"DAC file '{dac_file_path}' missing required columns: {required_dac_cols}")
-             # Continue, but dac_gdf will remain None
         else:
-            dac_locs = dac_locs[required_dac_cols] # Select only needed columns
-
+            dac_locs = dac_locs[required_dac_cols]
             def safe_wkt_load(geom_str):
                 try: return wkt.loads(geom_str)
                 except Exception: return None
-
             dac_locs['multipolygon'] = dac_locs['the_geom'].apply(safe_wkt_load)
-            dac_locs = dac_locs.dropna(subset=['multipolygon']) # Remove rows where geometry loading failed
+            dac_locs = dac_locs.dropna(subset=['multipolygon'])
+            st.write(f"DEBUG: DAC WKT loaded. Shape after dropna: {dac_locs.shape}")
 
             if not dac_locs.empty:
                 try:
-                     # Convert to GeoDataFrame *after* creating geometries and dropping invalid ones
-                     dac_gdf = gpd.GeoDataFrame(dac_locs, geometry='multipolygon', crs="EPSG:4326") # Assuming WGS84
-                     # Filter GeoDataFrame for valid geometries just in case
-                     dac_gdf = dac_gdf[dac_gdf.is_valid].copy()
-                     if dac_gdf.empty: st.warning("No valid DAC locations found after geometry processing.")
-                     #else: st.success(f"Successfully loaded {len(dac_gdf)} valid DAC geometries.")
+                     # *** FIX: Use dac_locs_gdf consistently ***
+                     temp_gdf = gpd.GeoDataFrame(dac_locs, geometry='multipolygon', crs="EPSG:4326")
+                     # Assign the potentially filtered result to the main variable
+                     dac_locs_gdf = temp_gdf[temp_gdf.is_valid].copy()
 
+                     if dac_locs_gdf.empty:
+                          st.warning("No valid DAC locations after GDF processing.")
+                          st.write("DEBUG: dac_locs_gdf became empty after .is_valid check.") # DEBUG
+                          # Ensure it's None if empty after filtering
+                          dac_locs_gdf = None
+                     else:
+                          st.write(f"DEBUG: DAC GeoDataFrame assigned successfully. Shape: {dac_locs_gdf.shape}") # DEBUG
                 except Exception as gdf_error:
                      st.error(f"Error creating DAC GeoDataFrame: {gdf_error}")
-                     dac_gdf = None # Ensure it's None on error
+                     st.write(f"DEBUG: Error during GDF creation: {gdf_error}") # DEBUG
+                     dac_locs_gdf = None # Ensure None on error
             else:
-                 st.warning("No DAC locations found after initial filtering and WKT loading.")
-
+                 st.warning("No valid DAC locations found after initial processing.")
+                 st.write("DEBUG: dac_locs DataFrame was empty before GDF creation.") # DEBUG
 
     except FileNotFoundError as e:
-        st.error(f"Error loading data file: {e}. Ensure '.data/uszips.csv' and '.data/dac_file.csv' exist.")
-        # Return empty/None values
+        st.error(f"Error loading data file: {e}. Ensure files exist in '.data/'")
+        st.write(f"DEBUG: Caught FileNotFoundError: {e}") # DEBUG
         return pd.DataFrame(), {}, None
-    except ImportError:
-         # This might occur if geopandas/shapely aren't installed, needed for DAC
-         st.error("Missing required spatial libraries (geopandas, shapely) needed for DAC processing. Please install them.")
-         # Return potentially loaded zip data, but None for DAC
+    except ImportError as e:
+         st.error(f"Missing required spatial libraries: {e}")
+         st.write(f"DEBUG: Caught ImportError: {e}") # DEBUG
          return zipcodes_df, zip_lookup, None
     except Exception as e:
-        st.error(f"An unexpected error occurred during spatial data loading: {e}")
-        st.error(traceback.format_exc()) # Print detailed traceback for debugging
-        # Return potentially partially loaded data
+        st.error(f"An unexpected error occurred during data loading: {e}")
+        st.write(f"DEBUG: Caught general Exception: {e}") # DEBUG
+        st.error(traceback.format_exc())
+        # Return current state, dac_locs_gdf might be None
         return zipcodes_df, zip_lookup, dac_locs_gdf
 
+    # Final check before returning
+    st.write(f"DEBUG: Exiting load_spatial_data. dac_locs_gdf is None? {dac_locs_gdf is None}")
+    if dac_locs_gdf is not None:
+         st.write(f"DEBUG: Type of dac_locs_gdf: {type(dac_locs_gdf)}, Shape: {dac_locs_gdf.shape}")
 
-    # Return the new zipcode dataframe, the new lookup, and the (unchanged logic) DAC geodataframe
+    # Return the potentially updated dac_locs_gdf
     return zipcodes_df, zip_lookup, dac_locs_gdf
 
 zipcodes_df, zip_lookup, dac_locs_gdf = load_spatial_data()
@@ -541,11 +540,12 @@ with tab1:
                 # ... (Expander with format guide) ...
                 with st.expander("Fleet CSV Format Guide & Example"):
                      st.markdown("""
-                        **Required Columns:** ...
-                        **Example CSV Structure:** ...
+                        **Required Columns:** Name, Powertrain (EV or Gas), Type (A or C), Quantity, Battery Capacity (kWh)
+                        
                         | Name                            | Powertrain | Type | Quantity | Battery Capacity (kWh) |
                         |---------------------------------|------------|------|----------|------------------------|
-                        ... (rest of table example) ...
+                        | Bus 1                           | EV         | A    | 10       | 88                     |
+                        | Bus 2                           | EV         | C    | 5        | 130                    |
                     """)
 
                 if uploaded_fleet_file is not None:
@@ -1201,9 +1201,6 @@ with tab3:
                  _calculation_successful = False
                  # Ensure plan results are cleared on error
                  st.session_state.plan_results_df = None
-# =======================================
-# TAB 4: Review Plan & Map
-# =======================================
 # Assuming necessary imports like streamlit, pandas, folium, polyline, Icon are done globally
 # Assuming plan_df, st.session_state.routes, st.session_state.results,
 # st.session_state.ev_fleet, zip_lookup, zipcodes_df etc. are available
