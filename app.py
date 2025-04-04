@@ -252,48 +252,99 @@ def convert_df_to_csv(df): # Helper for download button later
     return output.getvalue().encode('utf-8')
 
 # ------------------------ Load Data (Do this once) ---------------------
-@st.cache_data
+@st.cache_data # Cache the data loading
 def load_spatial_data():
-    try:
-        zipcodes_df = pd.read_csv(".data/Modified_Zip_Code_Tabulation_Areas__MODZCTA_.csv")
-        dac_locs_raw = pd.read_csv(".data/dac_file.csv")
+    """
+    Loads zipcode data (lat/lon) from uszips.csv and DAC spatial data.
 
-        zipcodes_df["geometry"] = zipcodes_df["the_geom"].apply(wkt.loads)
-        is_valid_geometry = zipcodes_df['geometry'].apply(lambda geom: isinstance(geom, base.BaseGeometry) and geom.is_valid)
-        zipcodes_df = zipcodes_df[is_valid_geometry].copy()
-        zipcodes_df["centroid_lat"] = zipcodes_df["geometry"].apply(lambda g: g.centroid.y)
-        zipcodes_df["centroid_lng"] = zipcodes_df["geometry"].apply(lambda g: g.centroid.x)
-        zip_lookup = zipcodes_df.set_index("MODZCTA")[["centroid_lat", "centroid_lng"]].to_dict("index")
+    Returns:
+        tuple: (
+            pandas.DataFrame: zipcodes_df containing 'zip', 'latitude', 'longitude'.
+            dict: zip_lookup mapping 5-digit zip string to {'latitude': lat, 'longitude': lon}.
+            geopandas.GeoDataFrame: dac_locs_gdf containing DAC geometries, or None if loading fails.
+        )
+    """
+    zipcodes_df = pd.DataFrame() # Initialize empty DataFrame
+    zip_lookup = {} # Initialize empty dict
+    dac_locs_gdf = None # Initialize as None
+
+    try:
+        # --- Load and Process New Zipcode Data ---
+        zip_file_path = ".data/uszips.csv"
+        # Read CSV, ensuring 'zip' column is treated as string to preserve leading zeros
+        zipcodes_df = pd.read_csv(zip_file_path, dtype={'zip': str})
+
+        # Validate required columns exist
+        required_zip_cols = ['zip', 'lat', 'lng']
+        if not all(col in zipcodes_df.columns for col in required_zip_cols):
+            missing_cols_str = ", ".join(c for c in required_zip_cols if c not in zipcodes_df.columns)
+            st.error(f"Zipcode file '{zip_file_path}' is missing required columns: {missing_cols_str}")
+            # Return defaults, DAC might still load below
+            # return pd.DataFrame(), {}, None # Option 1: Return immediately
+        else:
+            # Ensure all zip codes are 5 characters long with leading zeros
+            zipcodes_df.rename(columns={'lat': 'latitude', 'lng': 'longitude'}, inplace=True)
+            zipcodes_df['zip'] = zipcodes_df['zip'].astype(str).str.zfill(5)
+
+            # Create the lookup dictionary: zip_string -> {lat: y, lon: x}
+            # Set index AFTER padding zip codes
+            zip_lookup = zipcodes_df.set_index('zip')[['latitude', 'longitude']].to_dict("index")
+            #st.success(f"Successfully loaded and processed {len(zipcodes_df)} zip codes.") # Success message
+
+
+        # --- Load and Process DAC Data (Logic remains unchanged) ---
+        dac_file_path = ".data/dac_file.csv"
+        dac_locs_raw = pd.read_csv(dac_file_path)
 
         dac_locs = dac_locs_raw[dac_locs_raw['DAC_Designation'] == 'Designated as DAC'].copy()
-        cols = ['the_geom', 'GEOID']
-        if not all(col in dac_locs.columns for col in cols):
-             st.error(f"DAC file missing required columns: {cols}")
-             return zipcodes_df, zip_lookup, None
+        required_dac_cols = ['the_geom', 'GEOID'] # Keep original required columns for DAC
+        if not all(col in dac_locs.columns for col in required_dac_cols):
+             st.error(f"DAC file '{dac_file_path}' missing required columns: {required_dac_cols}")
+             # Continue, but dac_gdf will remain None
+        else:
+            dac_locs = dac_locs[required_dac_cols] # Select only needed columns
 
-        dac_locs = dac_locs[cols]
-        def safe_wkt_load(geom_str):
-            try: return wkt.loads(geom_str)
-            except Exception: return None
-        dac_locs['multipolygon'] = dac_locs['the_geom'].apply(safe_wkt_load)
-        dac_locs = dac_locs.dropna(subset=['multipolygon'])
+            def safe_wkt_load(geom_str):
+                try: return wkt.loads(geom_str)
+                except Exception: return None
 
-        dac_gdf = None
-        if not dac_locs.empty:
-            try:
-                 dac_gdf = gpd.GeoDataFrame(dac_locs, geometry='multipolygon', crs="EPSG:4326")
-                 dac_gdf = dac_gdf[dac_gdf.is_valid].copy()
-                 if dac_gdf.empty: st.warning("No valid DAC locations after filtering.")
-            except Exception as gdf_error:
-                 st.error(f"Error creating DAC GeoDataFrame: {gdf_error}")
-                 dac_gdf = None # Ensure it's None on error
-        else: st.warning("No valid DAC locations found after processing.")
+            dac_locs['multipolygon'] = dac_locs['the_geom'].apply(safe_wkt_load)
+            dac_locs = dac_locs.dropna(subset=['multipolygon']) # Remove rows where geometry loading failed
 
-        return zipcodes_df, zip_lookup, dac_gdf
+            if not dac_locs.empty:
+                try:
+                     # Convert to GeoDataFrame *after* creating geometries and dropping invalid ones
+                     dac_gdf = gpd.GeoDataFrame(dac_locs, geometry='multipolygon', crs="EPSG:4326") # Assuming WGS84
+                     # Filter GeoDataFrame for valid geometries just in case
+                     dac_gdf = dac_gdf[dac_gdf.is_valid].copy()
+                     if dac_gdf.empty: st.warning("No valid DAC locations found after geometry processing.")
+                     #else: st.success(f"Successfully loaded {len(dac_gdf)} valid DAC geometries.")
 
-    except FileNotFoundError as e: st.error(f"Error loading data file: {e}. Ensure '.data/' files exist."); return pd.DataFrame(), {}, None
-    except ImportError: st.error("Missing spatial libraries (geopandas, shapely)."); return pd.DataFrame(), {}, None
-    except Exception as e: st.error(f"Unexpected error loading spatial data: {e}"); st.error(traceback.format_exc()); return pd.DataFrame(), {}, None
+                except Exception as gdf_error:
+                     st.error(f"Error creating DAC GeoDataFrame: {gdf_error}")
+                     dac_gdf = None # Ensure it's None on error
+            else:
+                 st.warning("No DAC locations found after initial filtering and WKT loading.")
+
+
+    except FileNotFoundError as e:
+        st.error(f"Error loading data file: {e}. Ensure '.data/uszips.csv' and '.data/dac_file.csv' exist.")
+        # Return empty/None values
+        return pd.DataFrame(), {}, None
+    except ImportError:
+         # This might occur if geopandas/shapely aren't installed, needed for DAC
+         st.error("Missing required spatial libraries (geopandas, shapely) needed for DAC processing. Please install them.")
+         # Return potentially loaded zip data, but None for DAC
+         return zipcodes_df, zip_lookup, None
+    except Exception as e:
+        st.error(f"An unexpected error occurred during spatial data loading: {e}")
+        st.error(traceback.format_exc()) # Print detailed traceback for debugging
+        # Return potentially partially loaded data
+        return zipcodes_df, zip_lookup, dac_locs_gdf
+
+
+    # Return the new zipcode dataframe, the new lookup, and the (unchanged logic) DAC geodataframe
+    return zipcodes_df, zip_lookup, dac_locs_gdf
 
 zipcodes_df, zip_lookup, dac_locs_gdf = load_spatial_data()
 
@@ -326,6 +377,41 @@ if not Maps_api_key:
 # --- Title ---
 st.title("Electric Bus Route Planning")
 st.markdown("Welcome to the NYCSBUS EV Route Machine. Follow the steps below.")
+
+# --- Place this block after st.title() and before st.tabs() ---
+
+# Optional: Add some space below the title
+st.write("")
+
+# --- Global Reset Button ---
+if st.button("🔁 Reset Application & Clear All Data",
+             key="reset_app_global_top",
+             help="Click to clear all uploaded data, routes, and results for this session.",
+             type="secondary"): # Use 'secondary' for less emphasis than primary actions
+
+    # Get a list of all keys currently in session state
+    keys_to_clear = list(st.session_state.keys())
+
+    # Iterate through the keys and delete them
+    for key in keys_to_clear:
+        try:
+            del st.session_state[key]
+        except KeyError:
+            # Should not happen if key was just listed, but handle defensively
+            pass
+
+    # Display a confirmation message
+    st.success("Application has been reset. Reloading...")
+
+    # Pause briefly so the user sees the message
+    time.sleep(1.5) # Pause for 1.5 seconds
+
+    # Rerun the script from the top with the cleared state
+    st.rerun()
+
+# Add a separator before the tabs start
+st.markdown("---")
+# --- End of Reset Button block ---
 
 # --- TABS IMPLEMENTATION ---
 tab1, tab2, tab3, tab4 = st.tabs([
@@ -436,7 +522,7 @@ with tab1:
                                 processed_ev_fleet = process_fleet_data(fleet_df)
                                 st.session_state.fleet_data = fleet_df
                                 st.session_state.ev_fleet = processed_ev_fleet
-                                st.success("✅ Manual fleet data processed and saved.")
+                                st.success("✅ Manual fleet data processed and saved. Move onto Step 2: Define Routes.")
                             else:
                                 st.warning("No valid bus data entered to save.")
                                 st.session_state.ev_fleet = None; st.session_state.fleet_data = None
@@ -567,7 +653,7 @@ with tab1:
                                          st.session_state.fleet_data = fleet_df_validated # Store the validated df used
                                          st.session_state.ev_fleet = processed_ev_fleet
 
-                                         st.success("✅ Uploaded fleet data processed and saved.")
+                                         st.success("✅ Uploaded fleet data processed and saved. Move onto Step 2: Define Routes.")
                                          # Let Streamlit's natural rerun update the view to show summary
 
                         # --- Exception Handling for file reading/parsing ---
@@ -591,7 +677,7 @@ with tab2:
         # Optionally disable the entire tab content if desired, but warning is usually sufficient
     else:
         # --- Fleet Data Loaded Confirmation ---
-        st.success("✅ Fleet data loaded. Choose a method below to define routes.")
+        st.success("Choose a method below to define routes.")
 
         # --- Input Method Selection ---
         # Use session state to remember the choice, default to Map
@@ -1118,174 +1204,248 @@ with tab3:
 # =======================================
 # TAB 4: Review Plan & Map
 # =======================================
+# Assuming necessary imports like streamlit, pandas, folium, polyline, Icon are done globally
+# Assuming plan_df, st.session_state.routes, st.session_state.results,
+# st.session_state.ev_fleet, zip_lookup, zipcodes_df etc. are available
+
 with tab4:
     st.header("Step 4: Review Electrification Plan & Route Map")
 
-    # Check if plan has been generated
+    # Check if the final plan results DataFrame exists in session state
     if st.session_state.get("plan_results_df") is None or st.session_state.plan_results_df.empty:
+        # If not, guide the user back to Tab 3
         st.warning("⬅️ Please generate the plan in **Tab 3: Process & Assign** first.")
     else:
+        # Plan exists, proceed with displaying results
         plan_df = st.session_state.plan_results_df # Use the saved plan df
 
-        # --- Display Tables ---
+        # --- Display Summary Tables ---
         st.subheader("🚌 EV Route Feasibility Summary")
         st.dataframe(plan_df, use_container_width=True)
 
         st.subheader("⚡ EV Fleet Range Summary")
-        # Ensure ev_fleet exists before displaying
+        # Ensure ev_fleet data exists before displaying its summary
         if st.session_state.get("ev_fleet") is not None:
              st.dataframe(st.session_state.ev_fleet, use_container_width=True)
         else:
-             st.warning("EV Fleet data not found (needed for summary).")
+             # This might happen if Tab 1 failed or fleet had no EVs
+             st.warning("EV Fleet data not found (needed for summary). Please check Tab 1.")
 
 
         # --- Map Visualization Section ---
-        st.markdown("---")
+        st.markdown("---") # Separator
         st.subheader("🗺️ Route Map Visualization")
 
-        if not st.session_state.get("results"): # Need original results for polylines
-             st.error("Route results data (containing map details) is missing. Please re-process routes in Tab 3.")
+        # Check if the prerequisite route calculation results exist
+        if not st.session_state.get("results"):
+             st.error("Route results data (containing map polylines) is missing. Please re-process routes in Tab 3.")
         else:
+             # Get the list of Route IDs present in the final plan
              route_ids_in_plan = plan_df['Route ID'].tolist()
              if not route_ids_in_plan:
+                 # Handle case where plan exists but has no routes (unlikely but possible)
                  st.info("No routes found in the generated plan to display on map.")
              else:
-                 # --- Map Controls ---
-                 # Ensure selection is valid, default to first route if not
+                 # --- Map Controls (Route and Trip Type Selection) ---
+                 # Ensure selection state exists and is valid, default to first route if not
                  current_selection = st.session_state.get("selected_route_id_map")
                  if current_selection not in route_ids_in_plan:
-                     st.session_state.selected_route_id_map = route_ids_in_plan[0]
+                     st.session_state.selected_route_id_map = route_ids_in_plan[0] # Default to first
 
+                 # Use columns for controls layout
                  col1, col2 = st.columns([1, 1])
                  with col1:
-                    # Find index safely
+                    # Find index safely for selectbox default
                     try: current_index = route_ids_in_plan.index(st.session_state.selected_route_id_map)
-                    except ValueError: current_index = 0
+                    except ValueError: current_index = 0 # Default to 0 if ID not found (shouldn't happen)
+
+                    # Route ID selector dropdown
                     st.session_state.selected_route_id_map = st.selectbox(
-                        "Select Route ID to Display:", options=route_ids_in_plan,
-                        key="map_route_selector_tab4", index=current_index # Unique key
+                        "Select Route ID to Display:",
+                        options=route_ids_in_plan,
+                        key="map_route_selector_tab4", # Unique key
+                        index=current_index
                     )
                  with col2:
+                     # Trip type selector radio buttons
                      trip_options = ["AM Trip", "PM Trip", "Round Trip"]
+                     # Default to "AM Trip" if state is missing or invalid
                      current_trip_type = st.session_state.get("selected_trip_type_map", "AM Trip")
                      if current_trip_type not in trip_options: current_trip_type = "AM Trip"
                      try: trip_index = trip_options.index(current_trip_type)
-                     except ValueError: trip_index = 0
+                     except ValueError: trip_index = 0 # Default to AM Trip index
+
                      st.session_state.selected_trip_type_map = st.radio(
-                        "Select Trip Type:", options=trip_options, key="map_trip_type_selector_tab4", # Unique key
-                        index=trip_index, horizontal=True
+                        "Select Trip Type:",
+                        options=trip_options,
+                        key="map_trip_type_selector_tab4", # Unique key
+                        index=trip_index,
+                        horizontal=True
                      )
 
-                 # --- Find Selected Route Data (Original and Feasibility) ---
-                 selected_route_original_data = next((r for r in st.session_state.routes if r.get("route_id") == st.session_state.selected_route_id_map), None)
-                 selected_feasibility_data = next((res for res in st.session_state.results if res.get("Route ID") == st.session_state.selected_route_id_map), None)
+                 # --- Find Selected Route Data ---
+                 # Get the original route definition (for stops)
+                 selected_route_original_data = next((r for r in st.session_state.get("routes", []) if r.get("route_id") == st.session_state.selected_route_id_map), None)
+                 # Get the calculated feasibility results (for polylines, distances etc.)
+                 selected_feasibility_data = next((res for res in st.session_state.get("results", []) if res.get("Route ID") == st.session_state.selected_route_id_map), None)
 
+                 # Proceed only if both original route data and feasibility data were found
                  if selected_route_original_data and selected_feasibility_data:
-                    map_col, info_col = st.columns([3, 2]) # Ratio for map and info panel
+                    # Use columns for Map and Info Panel layout
+                    map_col, info_col = st.columns([3, 2]) # Adjust ratio as needed (3 parts map, 2 parts info)
+
                     with map_col:
                         # --- Map Creation ---
-                        # Find a center point (depot, first pickup, first dropoff, or default)
+                        # Find a default center point - fit_bounds will override this later
                         depot_loc = selected_route_original_data.get("depot")
-                        first_pickup = selected_route_original_data.get("pickups",[{}])[0].get("location") if selected_route_original_data.get("pickups") else None
-                        first_dropoff = selected_route_original_data.get("dropoffs",[{}])[0].get("location") if selected_route_original_data.get("dropoffs") else None
-                        map_center = depot_loc or first_pickup or first_dropoff or [40.7128, -74.0060] # NYC Default
+                        pickups_list = selected_route_original_data.get("pickups", []) # Get lists safely
+                        dropoffs_list = selected_route_original_data.get("dropoffs", [])
+                        first_pickup = pickups_list[0].get("location") if pickups_list else None
+                        first_dropoff = dropoffs_list[0].get("location") if dropoffs_list else None
+                        # Determine initial center for map creation
+                        map_center = depot_loc or first_pickup or first_dropoff or [40.7128, -74.0060] # Fallback
 
-                        m = folium.Map(location=map_center, zoom_start=12, tiles="cartodbpositron")
+                        # Initialize map - start slightly zoomed out, fit_bounds will adjust
+                        m = folium.Map(location=map_center, zoom_start=11, tiles="cartodbpositron", control_scale=True)
+
+                        # --- Prepare ALL points for bounds fitting ---
+                        points_to_fit = []
+                        # Add depot location if valid
+                        if depot_loc and isinstance(depot_loc, (list, tuple)) and len(depot_loc) == 2:
+                             points_to_fit.append(depot_loc)
+                        # Add all pickup locations if valid
+                        for pickup in pickups_list:
+                             loc = pickup.get("location")
+                             if loc and isinstance(loc, (list, tuple)) and len(loc) == 2: points_to_fit.append(loc)
+                        # Add all dropoff locations if valid
+                        for dropoff in dropoffs_list:
+                             loc = dropoff.get("location")
+                             if loc and isinstance(loc, (list, tuple)) and len(loc) == 2: points_to_fit.append(loc)
 
                         # --- Add Markers ---
+                        # Helper function to add markers safely
                         def add_marker(loc, pop, tip, ico_name, ico_color):
                             if loc and isinstance(loc, (list, tuple)) and len(loc) == 2:
-                                try: # Add error handling for marker creation
-                                     folium.Marker(location=loc, popup=pop, tooltip=tip, icon=Icon(color=ico_color, icon=ico_name, prefix='fa')).add_to(m)
+                                try:
+                                     # Use Icon from folium directly
+                                     folium.Marker(location=loc, popup=pop, tooltip=tip, icon=folium.Icon(color=ico_color, icon=ico_name, prefix='fa')).add_to(m)
                                 except Exception as marker_err:
-                                     st.warning(f"Could not add marker for {tip} at {loc}: {marker_err}")
+                                     # Log warning but continue
+                                     st.warning(f"Could not add marker for '{tip}': {marker_err}")
 
-                        add_marker(depot_loc, f"Depot ({selected_route_original_data.get('route_id', 'N/A')})", "Depot", 'bus', DEPOT_COLOR)
-                        for i, pickup in enumerate(selected_route_original_data.get("pickups", [])): add_marker(pickup.get("location"), f"Pickup {i+1}", f"Pickup {i+1}", 'user-plus', PICKUP_COLOR)
-                        for i, dropoff in enumerate(selected_route_original_data.get("dropoffs", [])):
-                             bell_time_str = f" (Bell: {selected_feasibility_data.get('First School Bell Time', 'N/A')})" if i == 0 else ""
-                             add_marker(dropoff.get("location"), f"Dropoff {i+1}{bell_time_str}", f"Dropoff {i+1}", 'school', DROPOFF_COLOR)
+                        # Add markers for depot, pickups, dropoffs
+                        add_marker(depot_loc, f"Depot ({selected_route_original_data.get('route_id', 'N/A')})", "Depot", 'bus', DEPOT_COLOR) # Uses constant
+                        for i, pickup in enumerate(pickups_list): add_marker(pickup.get("location"), f"Pickup {i+1}", f"Pickup {i+1}", 'user-plus', PICKUP_COLOR) # Uses constant
+                        for i, dropoff in enumerate(dropoffs_list):
+                             # Include bell time in popup for first dropoff
+                             bell_time_str = f" (Bell: {selected_feasibility_data.get('First School Bell Time', 'N/A')})" if i == 0 and selected_feasibility_data.get('First School Bell Time') else ""
+                             add_marker(dropoff.get("location"), f"Dropoff {i+1}{bell_time_str}", f"Dropoff {i+1}", 'school', DROPOFF_COLOR) # Uses constant
 
-                        # --- Add Polylines ---
-                        points_to_fit = []
+
+                        # --- Add Polylines AND collect their points for bounds ---
+                        # Helper function to add polyline and return decoded points
                         def add_polyline_to_map(map_obj, encoded_polyline, color, weight, opacity, tooltip):
+                             # Make sure polyline library is available
                              if 'polyline' not in globals() or not encoded_polyline or not isinstance(encoded_polyline, str): return []
                              try:
-                                 decoded_points = polyline.decode(encoded_polyline)
+                                 decoded_points = polyline.decode(encoded_polyline) # Use imported polyline library
                                  if decoded_points:
                                      folium.PolyLine(locations=decoded_points, color=color, weight=weight, opacity=opacity, tooltip=tooltip).add_to(map_obj)
-                                     return decoded_points
-                             except Exception as poly_err: st.warning(f"Could not decode/add polyline '{tooltip}': {poly_err}")
+                                     return decoded_points # Return points for bounds calculation
+                             except Exception as poly_err:
+                                 st.warning(f"Could not decode/add polyline '{tooltip}': {poly_err}")
                              return []
 
+                        # Get polylines from feasibility results
                         am_poly = selected_feasibility_data.get("AM Overview Polyline")
                         pm_poly = selected_feasibility_data.get("PM Overview Polyline")
-                        if st.session_state.selected_trip_type_map in ["AM Trip", "Round Trip"]: points_to_fit.extend(add_polyline_to_map(m, am_poly, AM_ROUTE_COLOR, 4, 0.7, "AM Route"))
-                        if st.session_state.selected_trip_type_map in ["PM Trip", "Round Trip"]: points_to_fit.extend(add_polyline_to_map(m, pm_poly, PM_ROUTE_COLOR, 4, 0.7, "PM Route"))
 
-                        # --- Fit Bounds ---
-                        if points_to_fit:
-                             try: m.fit_bounds([[min(p[0] for p in points_to_fit), min(p[1] for p in points_to_fit)], [max(p[0] for p in points_to_fit), max(p[1] for p in points_to_fit)]], padding=(0.01, 0.01))
-                             except Exception as bounds_err: st.warning(f"Could not fit map bounds: {bounds_err}") # Catch potential errors if points_to_fit is weird
-                        elif depot_loc: m.location = depot_loc; m.zoom_start = 14
+                        # Add selected polylines and collect their points for fitting bounds
+                        if st.session_state.selected_trip_type_map in ["AM Trip", "Round Trip"]:
+                             decoded_am_points = add_polyline_to_map(m, am_poly, AM_ROUTE_COLOR, 4, 0.7, "AM Route")
+                             if decoded_am_points: points_to_fit.extend(decoded_am_points) # Add points to list
+                        if st.session_state.selected_trip_type_map in ["PM Trip", "Round Trip"]:
+                             decoded_pm_points = add_polyline_to_map(m, pm_poly, PM_ROUTE_COLOR, 4, 0.7, "PM Route")
+                             if decoded_pm_points: points_to_fit.extend(decoded_pm_points) # Add points to list
+
+
+                        # --- Fit Bounds Using ALL Collected Points ---
+                        # Check if we have enough unique points to make bounds meaningful
+                        # Use set() to find unique points before checking length
+                        if len(set(map(tuple, points_to_fit))) >= 2: # Need at least 2 distinct points for bounds
+                            try:
+                                # Increase padding significantly to ensure visibility around the route
+                                m.fit_bounds(bounds=points_to_fit, padding=(0.25, 0.25)) # Increased padding
+                            except Exception as bounds_err:
+                                 st.warning(f"Could not automatically fit map bounds: {bounds_err}")
+                                 # Fallback: Center on the initial map_center if bounds fail
+                                 m.location = map_center
+                                 m.zoom_start = 11 # Reset zoom if bounds fail
+                        elif len(points_to_fit) == 1: # Center on single point if only one exists
+                             m.location = points_to_fit[0]
+                             m.zoom_start = 14 # Zoom closer for single point
+                        # If points_to_fit is empty, the initial map center/zoom calculated earlier remains
+
 
                         # --- Display Map ---
-                        st_folium(m, width='100%', height=500, key="route_map_display_tab4") # Unique key
+                        # Use a unique key for the map component within the tab
+                        st_folium(m, width='100%', height=500, key="route_map_display_tab4")
 
+                    # --- Info Panel Column ---
                     with info_col:
-                        # --- Info Panel ---
                         st.subheader(f"Route Details: {st.session_state.selected_route_id_map}")
 
-                        # Display AM/PM distances based on selected trip type
+                        # Display distances/durations based on selected trip type
                         am_dist = selected_feasibility_data.get("AM Distance (miles)")
                         pm_dist = selected_feasibility_data.get("PM Distance (miles)")
                         am_dur = selected_feasibility_data.get("AM Duration (min)")
                         pm_dur = selected_feasibility_data.get("PM Duration (min)")
 
                         st.markdown(f"**Trip Type Shown:** {st.session_state.selected_trip_type_map}")
+                        # Use st.metric for nice display
                         if st.session_state.selected_trip_type_map == "AM Trip":
-                            st.metric("AM Distance", f"{am_dist:.1f} mi" if am_dist else "N/A", delta=None, label_visibility="visible")
-                            st.metric("AM Duration", f"{am_dur:.0f} min" if am_dur else "N/A", delta=None, label_visibility="visible")
+                            st.metric("AM Distance", f"{am_dist:.1f} mi" if am_dist else "N/A")
+                            st.metric("AM Duration", f"{am_dur:.0f} min" if am_dur else "N/A")
                         elif st.session_state.selected_trip_type_map == "PM Trip":
-                            st.metric("PM Distance", f"{pm_dist:.1f} mi" if pm_dist else "N/A", delta=None, label_visibility="visible")
-                            st.metric("PM Duration", f"{pm_dur:.0f} min" if pm_dur else "N/A", delta=None, label_visibility="visible")
+                            st.metric("PM Distance", f"{pm_dist:.1f} mi" if pm_dist else "N/A")
+                            st.metric("PM Duration", f"{pm_dur:.0f} min" if pm_dur else "N/A")
                         else: # Round Trip
                              rt_dist = (am_dist or 0) + (pm_dist or 0)
                              rt_dur = (am_dur or 0) + (pm_dur or 0)
-                             st.metric("Round Trip Distance", f"{rt_dist:.1f} mi", delta=None, label_visibility="visible")
-                             st.metric("Round Trip Duration", f"{rt_dur:.0f} min", delta=None, label_visibility="visible")
+                             st.metric("Round Trip Distance", f"{rt_dist:.1f} mi")
+                             st.metric("Round Trip Duration", f"{rt_dur:.0f} min")
 
-                        st.divider()
+                        st.divider() # Visual separator
+                        # Display other route details
                         st.markdown(f"**Suggested Depot Departure:** {selected_feasibility_data.get('Suggested Depot Departure Time', 'N/A')}")
                         dac_percent = selected_feasibility_data.get('Percent in DAC')
                         st.markdown(f"**% Route in DAC:** {dac_percent:.1f}%" if dac_percent is not None else "N/A")
 
-                        # --- Eligibility from Plan DF ---
-                        route_plan_info = plan_df[plan_df['Route ID'] == st.session_state.selected_route_id_map].iloc[0] # Already checked plan_df exists
-                        eligibility = route_plan_info.get('EV Eligibility', 'N/A')
-                        bus_type = route_plan_info.get('Bus Type', 'N/A')
-                        eligible_bus_names = ""
-                        if eligibility in ["Preferred - All Weather", "OK in All Weather"]: eligible_bus_names = route_plan_info.get('Eligible Buses < 50°F', '')
-                        elif eligibility == "OK > 50°F Weather": eligible_bus_names = route_plan_info.get('Eligible Buses 50–70°F', '')
-                        elif eligibility == "OK > 70°F Weather": eligible_bus_names = route_plan_info.get('Eligible Buses 70°F+', '')
+                        # --- Display Eligibility from Plan DataFrame ---
+                        # Find the row in the plan_df for the selected route
+                        route_plan_info = plan_df[plan_df['Route ID'] == st.session_state.selected_route_id_map]
+                        # Check if info was found (it should be if route_id is valid)
+                        if not route_plan_info.empty:
+                            route_info_row = route_plan_info.iloc[0] # Get the first (and only) row
+                            eligibility = route_info_row.get('EV Eligibility', 'N/A')
+                            bus_type = route_info_row.get('Bus Type', 'N/A')
 
-                        eligibility_display = f"**EV Eligibility:** {eligibility}"
-                        if eligible_bus_names and isinstance(eligible_bus_names, str) and eligible_bus_names not in ["None", "N/A", ""]:
-                            eligibility_display += f" (with: *{eligible_bus_names}*)"
+                            # Determine which list of eligible buses to display based on weather
+                            eligible_bus_names = ""
+                            if eligibility in ["Preferred - All Weather", "OK in All Weather"]: eligible_bus_names = route_info_row.get('Eligible Buses < 50°F', '')
+                            elif eligibility == "OK > 50°F Weather": eligible_bus_names = route_info_row.get('Eligible Buses 50–70°F', '')
+                            elif eligibility == "OK > 70°F Weather": eligible_bus_names = route_info_row.get('Eligible Buses 70°F+', '')
 
-                        st.markdown(f"**Assigned Bus Type:** {bus_type}")
-                        st.markdown(eligibility_display)
+                            # Format the display string
+                            eligibility_display = f"**EV Eligibility:** {eligibility}"
+                            # Add bus names only if they are not empty/'None'/'N/A'
+                            if eligible_bus_names and isinstance(eligible_bus_names, str) and eligible_bus_names not in ["None", "N/A", ""]:
+                                eligibility_display += f" (with: *{eligible_bus_names}*)"
 
-                 else: # End if selected_route_original_data and selected_feasibility_data found
+                            st.markdown(f"**Assigned Bus Type:** {bus_type}")
+                            st.markdown(eligibility_display) # Display the combined string
+                        else:
+                             st.markdown("**EV Eligibility Status:** Not found in plan details.")
+
+                 else: # Handle case where original route data or feasibility data wasn't found
                      st.warning(f"Could not retrieve all necessary data for Route ID: {st.session_state.selected_route_id_map} to display map/details.")
-
-# --- Global Reset Button (outside tabs) ---
-st.markdown("---")
-if st.button("🔁 Reset App State (Clear All Data)", key="reset_app_global"):
-    keys_to_clear = list(st.session_state.keys())
-    for key in keys_to_clear:
-         # Optionally keep specific keys if needed, e.g., theme settings
-         del st.session_state[key]
-    st.success("App state reset.")
-    time.sleep(1) # Brief pause
-    st.rerun()
