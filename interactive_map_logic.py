@@ -30,8 +30,7 @@ def handle_map_route_input(st, folium, st_folium, zipcodes_df, zip_lookup):
     if "center_on_next_run" not in st.session_state: st.session_state.center_on_next_run = None # Stores [lat, lon] for ZIP jump
 
     # --- UI Elements ---
-    st.subheader("Define Routes Interactively")
-    st.write("Select/create route, choose marker type, click map to add stops.")
+
 
     # --- Add New Route Section ---
     with st.expander("Add New Route"):
