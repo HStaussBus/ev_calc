@@ -375,7 +375,7 @@ if not Maps_api_key:
 
 # --- Title ---
 st.title("eReady by NYCSBUS")
-st.markdown("Electric Route Evaluation and Decision Readiness as you electrify your fleet. Follow the steps below to evaluate your E-Route capabilities, avoiding midday charging and prioritizing disadvantaged communities.")
+st.markdown("Electric Route Evaluation and Decision Readiness as you electrify your fleet. Follow the steps below to evaluate your E-Route capabilities, avoiding midday charging and prioritizing disadvantaged communities. No data entered here will be saved or viewed by NYCSBUS. Please avoid providing exact pupil locations in this app.")
 
 # --- Place this block after st.title() and before st.tabs() ---
 
