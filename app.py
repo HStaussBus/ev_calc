@@ -374,8 +374,8 @@ if not Maps_api_key:
     st.error("⚠️ Google Maps API key not found in secrets. Route calculations and map features requiring geocoding will be disabled.")
 
 # --- Title ---
-st.title("Electric Bus Route Planning")
-st.markdown("Welcome to the NYCSBUS EV Route Machine. Follow the steps below.")
+st.title("eReady by NYCSBUS")
+st.markdown("Electric Route Evaluation and Decision Readiness as you electrify your fleet. Follow the steps below to evaluate your E-Route capabilities, avoiding midday charging and prioritizing disadvantaged communities.")
 
 # --- Place this block after st.title() and before st.tabs() ---
 
