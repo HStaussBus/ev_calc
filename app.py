@@ -1371,8 +1371,8 @@ with tab4:
                         # Use set() to find unique points before checking length
                         if len(set(map(tuple, points_to_fit))) >= 2: # Need at least 2 distinct points for bounds
                             try:
-                                # Increase padding significantly to ensure visibility around the route
-                                m.fit_bounds(bounds=points_to_fit, padding=(0.25, 0.25)) # Increased padding
+                                m.location = map_center
+                                m.zoom_start = 11 # Increased padding
                             except Exception as bounds_err:
                                  st.warning(f"Could not automatically fit map bounds: {bounds_err}")
                                  # Fallback: Center on the initial map_center if bounds fail
@@ -1380,7 +1380,7 @@ with tab4:
                                  m.zoom_start = 11 # Reset zoom if bounds fail
                         elif len(points_to_fit) == 1: # Center on single point if only one exists
                              m.location = points_to_fit[0]
-                             m.zoom_start = 14 # Zoom closer for single point
+                             m.zoom_start = 11 # Zoom closer for single point
                         # If points_to_fit is empty, the initial map center/zoom calculated earlier remains
 
 
