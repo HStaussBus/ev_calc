@@ -374,8 +374,8 @@ if not Maps_api_key:
     st.error("⚠️ Google Maps API key not found in secrets. Route calculations and map features requiring geocoding will be disabled.")
 
 # --- Title ---
-st.title("eReady by NYCSBUS")
-st.markdown("NYCSBUS has created eReady - Electric Route Evaluation and Decision Readiness - as a tool to help companies operate EV buses. Follow the steps below to evaluate your E-Route capabilities, avoiding midday charging and prioritizing disadvantaged communities. No data entered here will be saved or viewed by NYCSBUS. Please avoid providing exact pupil locations in this app.")
+st.title("eReady - Powered by NYCSBUS")
+st.markdown("NYCSBUS has created eReady - Electric Route Evaluation and Decision Readiness - as a tool to help companies operate EV buses. Follow the steps below to evaluate your E-Route capabilities, avoiding midday charging and prioritizing disadvantaged communities. No route data entered here will be saved or viewed by NYCSBUS. Please avoid providing exact pupil locations in this app. Supported by NYSERDA through the Climate Justice Fellowship program.")
 
 # --- Place this block after st.title() and before st.tabs() ---
 
